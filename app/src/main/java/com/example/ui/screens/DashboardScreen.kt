@@ -189,14 +189,14 @@ fun DashboardScreen(
                     ) {
                         Column {
                             Text(
-                                text = "Live Screen Overlay",
+                                text = "Floating Screen Overlay",
                                 fontSize = 18.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = Color.White
                             )
                             Text(
-                                text = if (isOverlayServiceRunning) "Active • Floating bubble ready" else "Shows arrows on videos & apps",
-                                fontSize = 13.sp,
+                                text = if (isOverlayServiceRunning) "Active • Floating icon stays on screen even when app is closed" else "Small floating icon on top of videos & apps with full settings",
+                                fontSize = 12.sp,
                                 color = if (isOverlayServiceRunning) ChessLensGreen else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
@@ -204,6 +204,15 @@ fun DashboardScreen(
                         Switch(
                             checked = isOverlayServiceRunning,
                             onCheckedChange = { active ->
+                                if (active && !Settings.canDrawOverlays(context)) {
+                                    try {
+                                        val intent = Intent(
+                                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                            Uri.parse("package:${context.packageName}")
+                                        )
+                                        context.startActivity(intent)
+                                    } catch (e: Exception) {}
+                                }
                                 val intent = Intent(context, ChessLensOverlayService::class.java)
                                 if (active) {
                                     context.startService(intent)

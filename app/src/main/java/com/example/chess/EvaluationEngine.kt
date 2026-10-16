@@ -10,6 +10,8 @@ import com.example.model.MoveQuality
 import com.example.model.PieceColor
 import com.example.model.PieceType
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.exp
@@ -156,6 +158,68 @@ class EvaluationEngine(
 
         memoryCache[cacheKey] = analyses
         analyses
+    }
+
+    suspend fun analyzeMultipleLevelsSimultaneously(
+        position: ChessPosition,
+        levels: List<AnalysisLevel>,
+        detailLevel: DetailLevel = DetailLevel.INTERMEDIATE,
+        webSource: WebAnalysisSource? = null,
+        includeWebApis: Boolean = true,
+        onProgress: ((List<MoveAnalysis>) -> Unit)? = null
+    ): List<MoveAnalysis> = coroutineScope {
+        val accumulated = java.util.Collections.synchronizedList(mutableListOf<MoveAnalysis>())
+
+        val deferreds = mutableListOf<kotlinx.coroutines.Deferred<Unit>>()
+
+        // 1. Run local levels concurrently
+        for (lvl in levels.filter { it.enabled }) {
+            deferreds.add(
+                async(Dispatchers.Default) {
+                    try {
+                        val results = analyzePosition(position, lvl, detailLevel)
+                        if (results.isNotEmpty()) {
+                            accumulated.addAll(results)
+                            onProgress?.invoke(accumulated.toList())
+                        }
+                    } catch (e: Exception) {}
+                }
+            )
+        }
+
+        // 2. Run Web API levels concurrently in parallel
+        if (includeWebApis && webSource != null) {
+            // Lichess Cloud API
+            deferreds.add(
+                async(Dispatchers.IO) {
+                    try {
+                        val lichessResults = webSource.queryLichessCloud(position)
+                        if (!lichessResults.isNullOrEmpty()) {
+                            accumulated.addAll(lichessResults)
+                            onProgress?.invoke(accumulated.toList())
+                        }
+                    } catch (e: Exception) {}
+                }
+            )
+
+            // Stockfish Online API
+            deferreds.add(
+                async(Dispatchers.IO) {
+                    try {
+                        val sfOnline = webSource.queryStockfishOnline(position, depth = 12)
+                        if (sfOnline != null) {
+                            accumulated.add(sfOnline)
+                            onProgress?.invoke(accumulated.toList())
+                        }
+                    } catch (e: Exception) {}
+                }
+            )
+        }
+
+        // Await all simultaneous jobs
+        deferreds.forEach { it.await() }
+
+        accumulated.toList()
     }
 
     suspend fun findMovesToAvoid(

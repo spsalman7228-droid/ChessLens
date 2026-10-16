@@ -110,12 +110,16 @@ fun AnalysisBoardScreen(
         scope.launch {
             isAnalyzing = true
             try {
-                val combinedAnalyses = mutableListOf<MoveAnalysis>()
-                for (lvl in activeLevels) {
-                    val res = app.evaluationEngine.analyzePosition(position, lvl)
-                    combinedAnalyses.addAll(res)
-                }
-                analyses = combinedAnalyses
+                val results = app.evaluationEngine.analyzeMultipleLevelsSimultaneously(
+                    position = position,
+                    levels = activeLevels,
+                    webSource = app.webAnalysisSource,
+                    includeWebApis = true,
+                    onProgress = { progressive ->
+                        analyses = progressive
+                    }
+                )
+                analyses = results
 
                 val avoids = app.evaluationEngine.findMovesToAvoid(position, activeLevels.first())
                 avoidMoves = avoids

@@ -1,60 +1,802 @@
 package com.example.service
 
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
+import android.graphics.PixelFormat
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
+import android.provider.Settings
+import android.util.DisplayMetrics
+import android.view.Gravity
+import android.view.MotionEvent
+import android.view.View
+import android.view.WindowManager
+import android.widget.Button
+import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.Switch
+import android.widget.TextView
+import android.widget.Toast
 import androidx.core.app.NotificationCompat
+import com.example.ChessLensApplication
 import com.example.MainActivity
 import com.example.R
+import com.example.chess.DetailLevel
+import com.example.model.AnalysisLevel
+import com.example.model.ChessPosition
+import com.example.model.MoveAnalysis
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlin.math.abs
 
 class ChessLensOverlayService : Service() {
+
+    private var windowManager: WindowManager? = null
+    private var floatingBubbleView: View? = null
+    private var bubbleParams: WindowManager.LayoutParams? = null
+
+    private var settingsPanelView: View? = null
+    private var settingsPanelParams: WindowManager.LayoutParams? = null
+
+    private val serviceScope = CoroutineScope(Dispatchers.Main + Job())
+    private var liveAnalysisJob: Job? = null
+
+    // State
+    private var isLiveMode = false
+    private var isThinkFirst = true
+    private var isRevealed = false
+    private var isFlipped = false
+    private var selectedDetailLevel = DetailLevel.INTERMEDIATE
+    private var currentBubbleSizeDp = 54
+    private var currentBubbleAlpha = 1.0f
+
+    // Levels enabled
+    private var l1Enabled = true
+    private var l2Enabled = true
+    private var l3Enabled = true
+    private var lichessApiEnabled = true
+    private var stockfishOnlineEnabled = true
+    private var avoidEnabled = true
+
+    private var lastAnalyzedPosition: ChessPosition? = null
+    private var lastAnalyses: List<MoveAnalysis> = emptyList()
+    private var lastAvoidMoves: List<MoveAnalysis> = emptyList()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         _isOverlayRunning.value = true
+        windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification(isPaused = false))
+
+        initFloatingBubble()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_ANALYZE_NOW -> {
-                // Request capture
-                ChessLensAccessibilityService.instance?.captureScreen { bitmap ->
-                    _lastCapturedBitmap.value = bitmap
-                }
-            }
+            ACTION_ANALYZE_NOW -> triggerScreenAnalysis()
             ACTION_PAUSE -> {
                 _isPaused.value = true
-                val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                nm.notify(NOTIFICATION_ID, buildNotification(isPaused = true))
+                liveAnalysisJob?.cancel()
+                updateNotification(isPaused = true)
+                updateBubbleAppearance()
             }
             ACTION_RESUME -> {
                 _isPaused.value = false
-                val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                nm.notify(NOTIFICATION_ID, buildNotification(isPaused = false))
+                updateNotification(isPaused = false)
+                updateBubbleAppearance()
             }
-            ACTION_STOP -> {
-                stopSelf()
-            }
+            ACTION_STOP -> stopSelf()
         }
         return START_STICKY
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        liveAnalysisJob?.cancel()
+        removeFloatingBubble()
+        removeSettingsPanel()
         _isOverlayRunning.value = false
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun initFloatingBubble() {
+        if (!Settings.canDrawOverlays(this)) return
+
+        val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        } else {
+            @Suppress("DEPRECATION")
+            WindowManager.LayoutParams.TYPE_PHONE
+        }
+
+        val density = resources.displayMetrics.density
+        val sizePx = (currentBubbleSizeDp * density).toInt()
+
+        bubbleParams = WindowManager.LayoutParams(
+            sizePx,
+            sizePx,
+            layoutType,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = 30
+            y = 300
+        }
+
+        val frame = FrameLayout(this).apply {
+            val bg = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.parseColor("#0F172A"))
+                setStroke((2 * density).toInt(), Color.parseColor("#38BDF8"))
+            }
+            background = bg
+            elevation = 12 * density
+        }
+
+        val knightText = TextView(this).apply {
+            text = "♞"
+            textSize = 26f
+            setTextColor(Color.parseColor("#38BDF8"))
+            gravity = Gravity.CENTER
+        }
+        frame.addView(
+            knightText,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                Gravity.CENTER
+            )
+        )
+
+        // Status indicator dot (Top-Right)
+        val statusDot = View(this).apply {
+            val dotBg = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(if (_isPaused.value) Color.parseColor("#F87171") else Color.parseColor("#4ADE80"))
+            }
+            background = dotBg
+        }
+        val dotSize = (10 * density).toInt()
+        val dotParams = FrameLayout.LayoutParams(dotSize, dotSize).apply {
+            gravity = Gravity.TOP or Gravity.END
+            topMargin = (4 * density).toInt()
+            rightMargin = (4 * density).toInt()
+        }
+        frame.addView(statusDot, dotParams)
+
+        var initialX = 0
+        var initialY = 0
+        var touchStartX = 0f
+        var touchStartY = 0f
+
+        frame.setOnTouchListener { _, event ->
+            val p = bubbleParams ?: return@setOnTouchListener false
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    initialX = p.x
+                    initialY = p.y
+                    touchStartX = event.rawX
+                    touchStartY = event.rawY
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    p.x = initialX + (event.rawX - touchStartX).toInt()
+                    p.y = initialY + (event.rawY - touchStartY).toInt()
+                    try { windowManager?.updateViewLayout(frame, p) } catch (e: Exception) {}
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    val dX = abs(event.rawX - touchStartX)
+                    val dY = abs(event.rawY - touchStartY)
+                    if (dX < 10 && dY < 10) {
+                        // Single Tap! Toggle Settings / Analysis Panel
+                        toggleSettingsPanel()
+                    } else {
+                        // Snap to nearest screen edge
+                        val screenWidth = resources.displayMetrics.widthPixels
+                        p.x = if (event.rawX < screenWidth / 2) 20 else (screenWidth - p.width - 20)
+                        try { windowManager?.updateViewLayout(frame, p) } catch (e: Exception) {}
+                    }
+                    true
+                }
+                else -> false
+            }
+        }
+
+        floatingBubbleView = frame
+        try {
+            windowManager?.addView(frame, bubbleParams)
+        } catch (e: Exception) {}
+    }
+
+    private fun updateBubbleAppearance() {
+        floatingBubbleView?.alpha = currentBubbleAlpha
+    }
+
+    private fun removeFloatingBubble() {
+        floatingBubbleView?.let {
+            try { windowManager?.removeView(it) } catch (e: Exception) {}
+            floatingBubbleView = null
+        }
+    }
+
+    private fun toggleSettingsPanel() {
+        if (settingsPanelView != null) {
+            removeSettingsPanel()
+        } else {
+            showSettingsPanel()
+        }
+    }
+
+    private fun removeSettingsPanel() {
+        settingsPanelView?.let {
+            try { windowManager?.removeView(it) } catch (e: Exception) {}
+            settingsPanelView = null
+        }
+    }
+
+    @SuppressLint("SetTextI18n")
+    private fun showSettingsPanel() {
+        if (!Settings.canDrawOverlays(this)) return
+
+        val density = resources.displayMetrics.density
+        val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        } else {
+            @Suppress("DEPRECATION")
+            WindowManager.LayoutParams.TYPE_PHONE
+        }
+
+        settingsPanelParams = WindowManager.LayoutParams(
+            (340 * density).toInt(),
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            layoutType,
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.CENTER
+        }
+
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            val bg = GradientDrawable().apply {
+                cornerRadius = 16 * density
+                setColor(Color.parseColor("#0F172A"))
+                setStroke((1 * density).toInt(), Color.parseColor("#1E293B"))
+            }
+            background = bg
+            setPadding((16 * density).toInt(), (16 * density).toInt(), (16 * density).toInt(), (16 * density).toInt())
+            elevation = 16 * density
+        }
+
+        // Header: Title & Close
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val title = TextView(this).apply {
+            text = "ChessLens Floating Controls"
+            textSize = 16f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val closeBtn = TextView(this).apply {
+            text = "✕"
+            textSize = 18f
+            setTextColor(Color.parseColor("#94A3B8"))
+            setPadding((8 * density).toInt(), (4 * density).toInt(), (8 * density).toInt(), (4 * density).toInt())
+            setOnClickListener { removeSettingsPanel() }
+        }
+        header.addView(title)
+        header.addView(closeBtn)
+        card.addView(header)
+
+        // Primary Action: Analyze Screen Now
+        val analyzeBtn = Button(this).apply {
+            text = "⚡ Analyze Screen Now"
+            setTextColor(Color.parseColor("#0F172A"))
+            setTypeface(null, Typeface.BOLD)
+            val btnBg = GradientDrawable().apply {
+                cornerRadius = 10 * density
+                setColor(Color.parseColor("#38BDF8"))
+            }
+            background = btnBg
+            setOnClickListener {
+                triggerScreenAnalysis()
+                removeSettingsPanel()
+            }
+        }
+        val btnParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            topMargin = (12 * density).toInt()
+            bottomMargin = (12 * density).toInt()
+        }
+        card.addView(analyzeBtn, btnParams)
+
+        // Scrollable settings section
+        val scrollView = ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                (280 * density).toInt()
+            )
+        }
+        val scrollContent = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        // 1. Live Continuous Analysis Switch
+        val liveRow = createToggleRow("Continuous Live Mode", isLiveMode) { checked ->
+            isLiveMode = checked
+            if (checked) startLiveAnalysisLoop() else liveAnalysisJob?.cancel()
+        }
+        scrollContent.addView(liveRow)
+
+        // 2. Think-First Switch
+        val thinkFirstRow = createToggleRow("Think-First Mode", isThinkFirst) { checked ->
+            isThinkFirst = checked
+        }
+        scrollContent.addView(thinkFirstRow)
+
+        // 3. Flip Board
+        val flipRow = createToggleRow("Flip Board (Black POV)", isFlipped) { checked ->
+            isFlipped = checked
+        }
+        scrollContent.addView(flipRow)
+
+        // 4. Simultaneous Multi-API Levels Section
+        val apiHeader = TextView(this).apply {
+            text = "Simultaneous Multi-API / Levels:"
+            textSize = 12f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#38BDF8"))
+            setPadding(0, (8 * density).toInt(), 0, (4 * density).toInt())
+        }
+        scrollContent.addView(apiHeader)
+
+        scrollContent.addView(createToggleRow("Level 1: Depth 5 (Blue)", l1Enabled) { l1Enabled = it })
+        scrollContent.addView(createToggleRow("Level 2: Depth 10 (Teal)", l2Enabled) { l2Enabled = it })
+        scrollContent.addView(createToggleRow("Level 3: Depth 14 (Green)", l3Enabled) { l3Enabled = it })
+        scrollContent.addView(createToggleRow("Lichess Cloud API", lichessApiEnabled) { lichessApiEnabled = it })
+        scrollContent.addView(createToggleRow("Stockfish Online API", stockfishOnlineEnabled) { stockfishOnlineEnabled = it })
+        scrollContent.addView(createToggleRow("Moves to Avoid (Red)", avoidEnabled) { avoidEnabled = it })
+
+        // 5. Bubble Size selector
+        val sizeHeader = TextView(this).apply {
+            text = "Floating Bubble Size:"
+            textSize = 12f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#94A3B8"))
+            setPadding(0, (8 * density).toInt(), 0, (4 * density).toInt())
+        }
+        scrollContent.addView(sizeHeader)
+
+        val sizeRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_HORIZONTAL
+        }
+        listOf(Pair("Small", 44), Pair("Medium", 54), Pair("Large", 64)).forEach { (name, s) ->
+            val b = Button(this).apply {
+                text = name
+                textSize = 11f
+                val isSel = currentBubbleSizeDp == s
+                setTextColor(if (isSel) Color.parseColor("#0F172A") else Color.WHITE)
+                background = GradientDrawable().apply {
+                    cornerRadius = 8 * density
+                    setColor(if (isSel) Color.parseColor("#38BDF8") else Color.parseColor("#1E293B"))
+                }
+                setOnClickListener {
+                    currentBubbleSizeDp = s
+                    updateBubbleSize(s)
+                    removeSettingsPanel()
+                    showSettingsPanel()
+                }
+            }
+            val lp = LinearLayout.LayoutParams(0, (36 * density).toInt(), 1f).apply {
+                marginEnd = (4 * density).toInt()
+            }
+            sizeRow.addView(b, lp)
+        }
+        scrollContent.addView(sizeRow)
+
+        // 6. Bubble Opacity
+        val alphaHeader = TextView(this).apply {
+            text = "Floating Bubble Opacity:"
+            textSize = 12f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#94A3B8"))
+            setPadding(0, (8 * density).toInt(), 0, (4 * density).toInt())
+        }
+        scrollContent.addView(alphaHeader)
+
+        val alphaRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_HORIZONTAL
+        }
+        listOf(Pair("100%", 1.0f), Pair("75%", 0.75f), Pair("50%", 0.5f)).forEach { (name, a) ->
+            val b = Button(this).apply {
+                text = name
+                textSize = 11f
+                val isSel = currentBubbleAlpha == a
+                setTextColor(if (isSel) Color.parseColor("#0F172A") else Color.WHITE)
+                background = GradientDrawable().apply {
+                    cornerRadius = 8 * density
+                    setColor(if (isSel) Color.parseColor("#38BDF8") else Color.parseColor("#1E293B"))
+                }
+                setOnClickListener {
+                    currentBubbleAlpha = a
+                    updateBubbleAppearance()
+                    removeSettingsPanel()
+                    showSettingsPanel()
+                }
+            }
+            val lp = LinearLayout.LayoutParams(0, (36 * density).toInt(), 1f).apply {
+                marginEnd = (4 * density).toInt()
+            }
+            alphaRow.addView(b, lp)
+        }
+        scrollContent.addView(alphaRow)
+
+        scrollView.addView(scrollContent)
+        card.addView(scrollView)
+
+        // Footer buttons: Open App & Close
+        val footer = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, (12 * density).toInt(), 0, 0)
+        }
+        val openAppBtn = Button(this).apply {
+            text = "Open Full App"
+            textSize = 12f
+            setTextColor(Color.WHITE)
+            background = GradientDrawable().apply {
+                cornerRadius = 8 * density
+                setColor(Color.parseColor("#1E293B"))
+            }
+            setOnClickListener {
+                val intent = Intent(this@ChessLensOverlayService, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                }
+                startActivity(intent)
+                removeSettingsPanel()
+            }
+        }
+        val closeFloatingBtn = Button(this).apply {
+            text = "Close Floating Icon"
+            textSize = 12f
+            setTextColor(Color.parseColor("#F87171"))
+            background = GradientDrawable().apply {
+                cornerRadius = 8 * density
+                setColor(Color.parseColor("#261418"))
+            }
+            setOnClickListener {
+                removeSettingsPanel()
+                stopSelf()
+            }
+        }
+        footer.addView(openAppBtn, LinearLayout.LayoutParams(0, (38 * density).toInt(), 1f).apply { marginEnd = (6 * density).toInt() })
+        footer.addView(closeFloatingBtn, LinearLayout.LayoutParams(0, (38 * density).toInt(), 1f))
+        card.addView(footer)
+
+        settingsPanelView = card
+        try {
+            windowManager?.addView(card, settingsPanelParams)
+        } catch (e: Exception) {}
+    }
+
+    private fun updateBubbleSize(sizeDp: Int) {
+        val density = resources.displayMetrics.density
+        val sizePx = (sizeDp * density).toInt()
+        bubbleParams?.width = sizePx
+        bubbleParams?.height = sizePx
+        floatingBubbleView?.let { v ->
+            try { windowManager?.updateViewLayout(v, bubbleParams) } catch (e: Exception) {}
+        }
+    }
+
+    private fun createToggleRow(label: String, initialChecked: Boolean, onChecked: (Boolean) -> Unit): LinearLayout {
+        val density = resources.displayMetrics.density
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, (4 * density).toInt(), 0, (4 * density).toInt())
+
+            val tv = TextView(this@ChessLensOverlayService).apply {
+                text = label
+                textSize = 13f
+                setTextColor(Color.WHITE)
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            val sw = Switch(this@ChessLensOverlayService).apply {
+                isChecked = initialChecked
+                setOnCheckedChangeListener { _, c -> onChecked(c) }
+            }
+            addView(tv)
+            addView(sw)
+        }
+    }
+
+    private fun triggerScreenAnalysis() {
+        val accessibility = ChessLensAccessibilityService.instance
+        if (accessibility == null) {
+            Toast.makeText(this, "Enable ChessLens in Accessibility Settings to read screen", Toast.LENGTH_LONG).show()
+            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            startActivity(intent)
+            return
+        }
+
+        // Accessibility Improvement: Check accessibility node hierarchy first (<5ms, zero battery)
+        val nodePosition = accessibility.tryReadPositionFromAccessibilityNodes()
+        if (nodePosition != null) {
+            runMultiApiAnalysis(nodePosition)
+            accessibility.vibrateFeedback(ChessLensAccessibilityService.FeedbackType.SUCCESS)
+            return
+        }
+
+        // Fallback: take screenshot on API 30+
+        accessibility.captureScreen { bitmap ->
+            if (bitmap != null) {
+                serviceScope.launch(Dispatchers.Default) {
+                    val detection = ChessLensApplication.instance.boardDetector.detectBoard(bitmap)
+                    if (detection != null) {
+                        launch(Dispatchers.Main) {
+                            runMultiApiAnalysis(detection.position)
+                            accessibility.vibrateFeedback(ChessLensAccessibilityService.FeedbackType.SUCCESS)
+                        }
+                    } else {
+                        launch(Dispatchers.Main) {
+                            Toast.makeText(this@ChessLensOverlayService, "No chessboard detected on screen", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+            } else {
+                Toast.makeText(this, "Could not capture screen frame", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun runMultiApiAnalysis(position: ChessPosition) {
+        val app = ChessLensApplication.instance
+        val accessibility = ChessLensAccessibilityService.instance
+
+        // Configure active levels for SIMULTANEOUS execution
+        val levels = mutableListOf<AnalysisLevel>()
+        if (l1Enabled) levels.add(AnalysisLevel("l1", "Level 1", "#38BDF8", depth = 5))
+        if (l2Enabled) levels.add(AnalysisLevel("l2", "Level 2", "#2DD4BF", depth = 10))
+        if (l3Enabled) levels.add(AnalysisLevel("l3", "Level 3", "#4ADE80", depth = 14))
+
+        serviceScope.launch {
+            try {
+                // Multi-API simultaneous run
+                val results = app.evaluationEngine.analyzeMultipleLevelsSimultaneously(
+                    position = position,
+                    levels = levels,
+                    detailLevel = selectedDetailLevel,
+                    webSource = app.webAnalysisSource,
+                    includeWebApis = lichessApiEnabled || stockfishOnlineEnabled
+                )
+
+                val avoids = if (avoidEnabled) {
+                    app.evaluationEngine.findMovesToAvoid(position, levels.firstOrNull() ?: AnalysisLevel("l1", "L1", "#38BDF8", 5))
+                } else emptyList()
+
+                lastAnalyzedPosition = position
+                lastAnalyses = results
+                lastAvoidMoves = avoids
+
+                // Show floating result card
+                showFloatingResultCard(position, results, avoids)
+
+                // Accessibility voice announcement
+                val topMove = results.firstOrNull()
+                if (topMove != null) {
+                    val evalStr = if (topMove.evalCentipawns > 0) "+${topMove.evalCentipawns / 100f}" else "${topMove.evalCentipawns / 100f}"
+                    accessibility?.speak("ChessLens: Recommended move is ${topMove.move.san}, evaluation $evalStr. ${topMove.explanation}")
+                }
+            } catch (e: Exception) {}
+        }
+    }
+
+    private var resultCardView: View? = null
+
+    private fun showFloatingResultCard(
+        position: ChessPosition,
+        analyses: List<MoveAnalysis>,
+        avoidMoves: List<MoveAnalysis>
+    ) {
+        if (!Settings.canDrawOverlays(this)) return
+        removeFloatingResultCard()
+
+        val density = resources.displayMetrics.density
+        val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        } else {
+            @Suppress("DEPRECATION")
+            WindowManager.LayoutParams.TYPE_PHONE
+        }
+
+        val cardParams = WindowManager.LayoutParams(
+            (320 * density).toInt(),
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            layoutType,
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            y = (60 * density).toInt()
+        }
+
+        val top = analyses.firstOrNull()
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                cornerRadius = 14 * density
+                setColor(Color.parseColor("#0F172A"))
+                setStroke((1 * density).toInt(), Color.parseColor("#38BDF8"))
+            }
+            setPadding((14 * density).toInt(), (12 * density).toInt(), (14 * density).toInt(), (12 * density).toInt())
+            elevation = 16 * density
+        }
+
+        // Header with Eval badge & Close
+        val row1 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val evalBadge = TextView(this).apply {
+            val evalText = if (top != null) "${if (top.evalCentipawns > 0) "+" else ""}%.1f".format(top.evalCentipawns / 100f) else "0.0"
+            text = "Eval $evalText"
+            textSize = 12f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#38BDF8"))
+            background = GradientDrawable().apply {
+                cornerRadius = 6 * density
+                setColor(Color.parseColor("#1E293B"))
+            }
+            setPadding((8 * density).toInt(), (3 * density).toInt(), (8 * density).toInt(), (3 * density).toInt())
+        }
+        val title = TextView(this).apply {
+            text = " Best: ${top?.move?.san ?: "None"}"
+            textSize = 15f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val dismissBtn = TextView(this).apply {
+            text = "✕"
+            textSize = 16f
+            setTextColor(Color.parseColor("#94A3B8"))
+            setPadding((6 * density).toInt(), 0, (6 * density).toInt(), 0)
+            setOnClickListener { removeFloatingResultCard() }
+        }
+        row1.addView(evalBadge)
+        row1.addView(title)
+        row1.addView(dismissBtn)
+        card.addView(row1)
+
+        // Explanation text
+        if (top != null) {
+            val expl = TextView(this).apply {
+                text = top.explanation
+                textSize = 12f
+                setTextColor(Color.parseColor("#E2E8F0"))
+                setPadding(0, (6 * density).toInt(), 0, (6 * density).toInt())
+            }
+            card.addView(expl)
+        }
+
+        // Avoid move warning (if any)
+        val avoid = avoidMoves.firstOrNull()
+        if (avoid != null) {
+            val avoidBox = TextView(this).apply {
+                text = "⚠ Avoid ${avoid.move.san}: ${avoid.avoidReason ?: avoid.explanation}"
+                textSize = 11f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(Color.parseColor("#F87171"))
+                background = GradientDrawable().apply {
+                    cornerRadius = 6 * density
+                    setColor(Color.parseColor("#261418"))
+                }
+                setPadding((8 * density).toInt(), (4 * density).toInt(), (8 * density).toInt(), (4 * density).toInt())
+            }
+            card.addView(avoidBox)
+        }
+
+        // Action row: Copy FEN & Open in App
+        val actionRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, (8 * density).toInt(), 0, 0)
+        }
+        val copyBtn = Button(this).apply {
+            text = "Copy FEN"
+            textSize = 11f
+            setTextColor(Color.WHITE)
+            background = GradientDrawable().apply {
+                cornerRadius = 6 * density
+                setColor(Color.parseColor("#1E293B"))
+            }
+            setOnClickListener {
+                val cb = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cb.setPrimaryClip(ClipData.newPlainText("FEN", position.toFen()))
+                Toast.makeText(this@ChessLensOverlayService, "FEN Copied!", Toast.LENGTH_SHORT).show()
+            }
+        }
+        val openAppBtn = Button(this).apply {
+            text = "Full Studio"
+            textSize = 11f
+            setTextColor(Color.parseColor("#0F172A"))
+            setTypeface(null, Typeface.BOLD)
+            background = GradientDrawable().apply {
+                cornerRadius = 6 * density
+                setColor(Color.parseColor("#38BDF8"))
+            }
+            setOnClickListener {
+                val intent = Intent(this@ChessLensOverlayService, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                }
+                startActivity(intent)
+                removeFloatingResultCard()
+            }
+        }
+        actionRow.addView(copyBtn, LinearLayout.LayoutParams(0, (32 * density).toInt(), 1f).apply { marginEnd = (6 * density).toInt() })
+        actionRow.addView(openAppBtn, LinearLayout.LayoutParams(0, (32 * density).toInt(), 1f))
+        card.addView(actionRow)
+
+        resultCardView = card
+        try {
+            windowManager?.addView(card, cardParams)
+        } catch (e: Exception) {}
+    }
+
+    private fun removeFloatingResultCard() {
+        resultCardView?.let {
+            try { windowManager?.removeView(it) } catch (e: Exception) {}
+            resultCardView = null
+        }
+    }
+
+    private fun startLiveAnalysisLoop() {
+        liveAnalysisJob?.cancel()
+        liveAnalysisJob = serviceScope.launch {
+            while (isActive && isLiveMode) {
+                delay(2000)
+                if (!_isPaused.value) {
+                    triggerScreenAnalysis()
+                }
+            }
+        }
     }
 
     private fun createNotificationChannel() {
@@ -70,6 +812,11 @@ class ChessLensOverlayService : Service() {
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.createNotificationChannel(channel)
         }
+    }
+
+    private fun updateNotification(isPaused: Boolean) {
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.notify(NOTIFICATION_ID, buildNotification(isPaused))
     }
 
     private fun buildNotification(isPaused: Boolean): Notification {
@@ -98,7 +845,7 @@ class ChessLensOverlayService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.chesslens_icon)
             .setContentTitle(getString(R.string.notification_title))
-            .setContentText(if (isPaused) "Analysis paused" else getString(R.string.notification_text))
+            .setContentText(if (isPaused) "Floating bubble paused" else "Floating bubble active on screen")
             .setContentIntent(openAppPendingIntent)
             .setOngoing(true)
             .addAction(
