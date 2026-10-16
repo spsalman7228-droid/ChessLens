@@ -31,7 +31,7 @@ class ChessLensAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        _isServiceRunning.value = true
+        Companion._isServiceRunning.value = true
         instance = this
         speak("ChessLens accessibility service is active and ready to recognize on-screen chessboards.")
         vibrateFeedback(FeedbackType.CLICK)
@@ -40,17 +40,23 @@ class ChessLensAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         // Track current foreground app package for context
         event?.packageName?.toString()?.let { pkg ->
-            _currentForegroundPackage.value = pkg
+            Companion._currentForegroundPackage.value = pkg
+        }
+        val type = event?.eventType
+        if (type == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED ||
+            type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+            type == AccessibilityEvent.TYPE_VIEW_CLICKED) {
+            ChessLensOverlayService.instance?.onBoardContentChanged()
         }
     }
 
     override fun onInterrupt() {
-        _isServiceRunning.value = false
+        Companion._isServiceRunning.value = false
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        _isServiceRunning.value = false
+        Companion._isServiceRunning.value = false
         if (instance == this) {
             instance = null
         }

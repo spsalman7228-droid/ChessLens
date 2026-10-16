@@ -240,6 +240,28 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
+            // 4. Browser Resolution & DPI
+            SettingsSectionHeader(title = "Browser Resolution & DPI", icon = Icons.Default.Tv)
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Slate900),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Text("DPI Scale (Crispness)", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 14.sp)
+                    val dpiScale by app.preferencesManager.browserDpiScale.collectAsState(initial = 150)
+                    Slider(
+                        value = dpiScale.toFloat(),
+                        onValueChange = { scope.launch { app.preferencesManager.setBrowserDpiScale(it.toInt()) } },
+                        valueRange = 100f..200f,
+                        steps = 4,
+                        colors = SliderDefaults.colors(thumbColor = ChessLensCyan, activeTrackColor = ChessLensCyan)
+                    )
+                    Text("Scale: ${dpiScale}%", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+
             // 3. Arrow Styles
             SettingsSectionHeader(title = "Arrow Styles", icon = Icons.Default.Tune)
             Card(

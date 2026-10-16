@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -106,7 +107,8 @@ fun DashboardScreen(
 
     val overlayActive by app.preferencesManager.overlayActive.collectAsState(initial = false)
     val isAccessibilityRunning by ChessLensAccessibilityService.isServiceRunning.collectAsState()
-    val isOverlayServiceRunning by ChessLensOverlayService.isOverlayRunning.collectAsState()
+    val isOverlayServiceRunning by ChessLensOverlayService.isOverlayRunning.collectAsState(initial = false)
+    val alwaysAnalyzeMoves by app.preferencesManager.alwaysAnalyzeMoves.collectAsState(initial = true)
     val recentHistory by app.historyRepository.allHistory.collectAsState(initial = emptyList())
 
     // Photo / image picker
@@ -456,20 +458,31 @@ fun DashboardScreen(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
+                            // Auto-Analyze Toggle
                             Button(
                                 onClick = {
-                                    val intent = Intent(context, ChessLensOverlayService::class.java).apply {
-                                        action = ChessLensOverlayService.ACTION_ANALYZE_NOW
+                                    scope.launch {
+                                        app.preferencesManager.setAlwaysAnalyzeMoves(!alwaysAnalyzeMoves)
                                     }
-                                    androidx.core.content.ContextCompat.startForegroundService(context, intent)
                                 },
-                                colors = ButtonDefaults.buttonColors(containerColor = Slate800),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (alwaysAnalyzeMoves) ChessLensCyan.copy(alpha = 0.2f) else Slate800
+                                ),
                                 shape = RoundedCornerShape(10.dp),
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Icon(Icons.Default.Visibility, contentDescription = null, tint = ChessLensCyan, modifier = Modifier.size(16.dp))
+                                Icon(
+                                    if (alwaysAnalyzeMoves) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                    contentDescription = null,
+                                    tint = if (alwaysAnalyzeMoves) ChessLensCyan else Color.White,
+                                    modifier = Modifier.size(16.dp)
+                                )
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Snapshot Screen", fontSize = 12.sp, color = Color.White)
+                                Text(
+                                    if (alwaysAnalyzeMoves) "Auto-Analyse: ON" else "Auto-Analyse: OFF",
+                                    fontSize = 12.sp,
+                                    color = if (alwaysAnalyzeMoves) ChessLensCyan else Color.White
+                                )
                             }
 
                             Button(

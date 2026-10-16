@@ -54,6 +54,10 @@ class PreferencesManager(private val context: Context) {
         val KEY_ALLOWED_APPS = stringSetPreferencesKey("allowed_apps")
         val KEY_FLIP_BOARD = booleanPreferencesKey("flip_board")
         val KEY_AUTO_HIDE_BUBBLE = booleanPreferencesKey("auto_hide_bubble")
+        val KEY_BROWSER_DPI_SCALE = intPreferencesKey("browser_dpi_scale")
+        val KEY_BROWSER_RESOLUTION_MODE = stringPreferencesKey("browser_resolution_mode")
+        val KEY_BROWSER_TEXT_ZOOM = intPreferencesKey("browser_text_zoom")
+        val KEY_ALWAYS_ANALYZE_MOVES = booleanPreferencesKey("always_analyze_moves")
     }
 
     val onboardingCompleted: Flow<Boolean> = context.dataStore.data.map { it[KEY_ONBOARDING_DONE] ?: false }
@@ -80,6 +84,10 @@ class PreferencesManager(private val context: Context) {
     val dynamicColor: Flow<Boolean> = context.dataStore.data.map { it[KEY_DYNAMIC_COLOR] ?: false }
     val allowedApps: Flow<Set<String>> = context.dataStore.data.map { it[KEY_ALLOWED_APPS] ?: emptySet() }
     val isFlipped: Flow<Boolean> = context.dataStore.data.map { it[KEY_FLIP_BOARD] ?: false }
+    val browserDpiScale: Flow<Int> = context.dataStore.data.map { it[KEY_BROWSER_DPI_SCALE] ?: 150 }
+    val browserResolutionMode: Flow<String> = context.dataStore.data.map { it[KEY_BROWSER_RESOLUTION_MODE] ?: "150% Super Sharp" }
+    val browserTextZoom: Flow<Int> = context.dataStore.data.map { it[KEY_BROWSER_TEXT_ZOOM] ?: 115 }
+    val alwaysAnalyzeMoves: Flow<Boolean> = context.dataStore.data.map { it[KEY_ALWAYS_ANALYZE_MOVES] ?: true }
 
     suspend fun setOnboardingDone(done: Boolean) {
         context.dataStore.edit { it[KEY_ONBOARDING_DONE] = done }
@@ -139,5 +147,21 @@ class PreferencesManager(private val context: Context) {
 
     suspend fun setFlipped(flipped: Boolean) {
         context.dataStore.edit { it[KEY_FLIP_BOARD] = flipped }
+    }
+
+    suspend fun setBrowserDpiScale(dpiScale: Int) {
+        context.dataStore.edit { it[KEY_BROWSER_DPI_SCALE] = dpiScale }
+    }
+
+    suspend fun setBrowserResolutionMode(mode: String) {
+        context.dataStore.edit { it[KEY_BROWSER_RESOLUTION_MODE] = mode }
+    }
+
+    suspend fun setBrowserTextZoom(textZoom: Int) {
+        context.dataStore.edit { it[KEY_BROWSER_TEXT_ZOOM] = textZoom }
+    }
+
+    suspend fun setAlwaysAnalyzeMoves(enabled: Boolean) {
+        context.dataStore.edit { it[KEY_ALWAYS_ANALYZE_MOVES] = enabled }
     }
 }

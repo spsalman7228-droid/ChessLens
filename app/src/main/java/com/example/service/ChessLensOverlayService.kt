@@ -78,6 +78,7 @@ class ChessLensOverlayService : Service() {
     private var isThinkFirst = false
     private var isRevealed = false
     private var isFlipped = false
+    private var alwaysAnalyzeMoves = true
     private var selectedDetailLevel = DetailLevel.INTERMEDIATE
     private var currentBubbleSizeDp = 54
     private var currentBubbleAlpha = 1.0f
@@ -96,16 +97,31 @@ class ChessLensOverlayService : Service() {
     private var lastAnalyses: List<MoveAnalysis> = emptyList()
     private var lastAvoidMoves: List<MoveAnalysis> = emptyList()
 
+    fun onBoardContentChanged() {
+        if (alwaysAnalyzeMoves && !isPaused.value) {
+            triggerScreenAnalysis()
+        }
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         _isOverlayRunning.value = true
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification(isPaused = false))
 
         initFloatingBubble()
+        
+        serviceScope.launch {
+            val app = application as? com.example.ChessLensApplication ?: return@launch
+            app.preferencesManager.alwaysAnalyzeMoves.collect { enabled ->
+                alwaysAnalyzeMoves = enabled
+                updateNotification(isPaused = _isPaused.value)
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -135,6 +151,7 @@ class ChessLensOverlayService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        instance = null
         liveAnalysisJob?.cancel()
         hideScreenArrows()
         removeFloatingResultCard()
@@ -1120,6 +1137,7 @@ class ChessLensOverlayService : Service() {
     }
 
     companion object {
+        var instance: ChessLensOverlayService? = null
         const val CHANNEL_ID = "chesslens_overlay_channel"
         const val NOTIFICATION_ID = 1001
 
