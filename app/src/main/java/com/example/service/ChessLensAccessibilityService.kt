@@ -3,8 +3,8 @@ package com.example.service
 import android.accessibilityservice.AccessibilityService
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Rect
 import android.os.Build
-import android.os.CombinedVibration
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
@@ -21,18 +21,24 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.Locale
 
+data class AccessibilityBoardResult(
+    val position: ChessPosition,
+    val bounds: Rect,
+    val isFlipped: Boolean
+)
+
 class ChessLensAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         _isServiceRunning.value = true
         instance = this
-        speak("ChessLens accessibility service is connected and ready to assist.")
+        speak("ChessLens accessibility service is active and ready to recognize on-screen chessboards.")
         vibrateFeedback(FeedbackType.CLICK)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // Track current foreground app package for allowlist enforcement
+        // Track current foreground app package for context
         event?.packageName?.toString()?.let { pkg ->
             _currentForegroundPackage.value = pkg
         }
@@ -52,12 +58,18 @@ class ChessLensAccessibilityService : AccessibilityService() {
 
     /**
      * Inspects active window hierarchy for accessibility semantic labels of chess pieces.
-     * Web platforms and chess apps frequently set descriptions like "White Queen on d1".
-     * If found, provides instant zero-latency 100% accurate board state without screen capture!
+     * Web platforms (chess.com, lichess) and chess apps frequently set descriptions like "White Queen on d1".
+     * If found, provides instant zero-latency 100% accurate board state & screen coordinates without screen capture!
      */
-    fun tryReadPositionFromAccessibilityNodes(): ChessPosition? {
+    fun tryReadPositionFromAccessibilityNodesWithBounds(): AccessibilityBoardResult? {
         val root = rootInActiveWindow ?: return null
         val foundPieces = mutableMapOf<ChessSquare, ChessPiece>()
+        var minX = Int.MAX_VALUE
+        var minY = Int.MAX_VALUE
+        var maxX = Int.MIN_VALUE
+        var maxY = Int.MIN_VALUE
+
+        val nodeRect = Rect()
 
         fun scanNode(node: AccessibilityNodeInfo?) {
             if (node == null) return
@@ -68,6 +80,13 @@ class ChessLensAccessibilityService : AccessibilityService() {
             if (combined.isNotBlank()) {
                 parseSquareAndPiece(combined)?.let { (sq, piece) ->
                     foundPieces[sq] = piece
+                    node.getBoundsInScreen(nodeRect)
+                    if (nodeRect.width() > 0 && nodeRect.height() > 0) {
+                        minX = minOf(minX, nodeRect.left)
+                        minY = minOf(minY, nodeRect.top)
+                        maxX = maxOf(maxX, nodeRect.right)
+                        maxY = maxOf(maxY, nodeRect.bottom)
+                    }
                 }
             }
 
@@ -78,15 +97,25 @@ class ChessLensAccessibilityService : AccessibilityService() {
 
         scanNode(root)
 
-        // If we found at least 10 chess pieces via accessibility nodes, construct position!
-        if (foundPieces.size >= 10) {
+        // If we found at least 8 chess pieces via accessibility nodes, construct position!
+        if (foundPieces.size >= 8) {
             val board = Array<ChessPiece?>(64) { null }
             foundPieces.forEach { (sq, piece) ->
                 board[sq.index] = piece
             }
+
+            val whiteOnBottom = foundPieces.count { it.value.color == PieceColor.WHITE && it.key.row >= 4 }
+            val whiteOnTop = foundPieces.count { it.value.color == PieceColor.WHITE && it.key.row < 4 }
+            val isFlipped = whiteOnTop > whiteOnBottom
+
             val pos = ChessPosition(board = board)
             if (pos.validate().isValid) {
-                return pos
+                val bounds = if (minX < maxX && minY < maxY) {
+                    Rect(minX, minY, maxX, maxY)
+                } else {
+                    Rect()
+                }
+                return AccessibilityBoardResult(pos, bounds, isFlipped)
             }
         }
         return null
@@ -125,12 +154,16 @@ class ChessLensAccessibilityService : AccessibilityService() {
                 mainExecutor,
                 object : TakeScreenshotCallback {
                     override fun onSuccess(screenshotResult: ScreenshotResult) {
-                        val hardwareBuffer = screenshotResult.hardwareBuffer
-                        val colorSpace = screenshotResult.colorSpace
-                        val bitmap = Bitmap.wrapHardwareBuffer(hardwareBuffer, colorSpace)
-                            ?.copy(Bitmap.Config.ARGB_8888, false)
-                        hardwareBuffer.close()
-                        onCaptured(bitmap)
+                        try {
+                            val hardwareBuffer = screenshotResult.hardwareBuffer
+                            val colorSpace = screenshotResult.colorSpace
+                            val bitmap = Bitmap.wrapHardwareBuffer(hardwareBuffer, colorSpace)
+                                ?.copy(Bitmap.Config.ARGB_8888, false)
+                            hardwareBuffer.close()
+                            onCaptured(bitmap)
+                        } catch (e: Exception) {
+                            onCaptured(null)
+                        }
                     }
 
                     override fun onFailure(errorCode: Int) {

@@ -12,22 +12,19 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
-import android.os.Handler
 import android.os.IBinder
-import android.os.Looper
 import android.provider.Settings
-import android.util.DisplayMetrics
+import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.FrameLayout
-import android.widget.HorizontalScrollView
-import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Switch
@@ -51,29 +48,41 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.math.min
 
 class ChessLensOverlayService : Service() {
 
     private var windowManager: WindowManager? = null
+
+    // 1. Floating Bubble Icon
     private var floatingBubbleView: View? = null
     private var bubbleParams: WindowManager.LayoutParams? = null
 
+    // 2. Fullscreen Transparent Arrow Overlay
+    private var arrowOverlayView: ArrowCanvasOverlayView? = null
+    private var arrowOverlayParams: WindowManager.LayoutParams? = null
+
+    // 3. Floating Result Card
+    private var resultCardView: View? = null
+    private var resultCardParams: WindowManager.LayoutParams? = null
+
+    // 4. Floating Settings / Quick Action Panel
     private var settingsPanelView: View? = null
     private var settingsPanelParams: WindowManager.LayoutParams? = null
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + Job())
     private var liveAnalysisJob: Job? = null
 
-    // State
+    // User settings & state
     private var isLiveMode = false
-    private var isThinkFirst = true
+    private var isThinkFirst = false
     private var isRevealed = false
     private var isFlipped = false
     private var selectedDetailLevel = DetailLevel.INTERMEDIATE
     private var currentBubbleSizeDp = 54
     private var currentBubbleAlpha = 1.0f
 
-    // Levels enabled
+    // Simultaneous Multi-API Levels
     private var l1Enabled = true
     private var l2Enabled = true
     private var l3Enabled = true
@@ -81,7 +90,9 @@ class ChessLensOverlayService : Service() {
     private var stockfishOnlineEnabled = true
     private var avoidEnabled = true
 
+    // Last analysis memory
     private var lastAnalyzedPosition: ChessPosition? = null
+    private var lastBounds: Rect = Rect()
     private var lastAnalyses: List<MoveAnalysis> = emptyList()
     private var lastAvoidMoves: List<MoveAnalysis> = emptyList()
 
@@ -100,6 +111,7 @@ class ChessLensOverlayService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_ANALYZE_NOW -> triggerScreenAnalysis()
+            ACTION_CLEAR_ARROWS -> hideScreenArrows()
             ACTION_PAUSE -> {
                 _isPaused.value = true
                 liveAnalysisJob?.cancel()
@@ -116,13 +128,24 @@ class ChessLensOverlayService : Service() {
         return START_STICKY
     }
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // Feature: Small floating icon stays even if the main app is closed / swiped from recents!
+        super.onTaskRemoved(rootIntent)
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         liveAnalysisJob?.cancel()
-        removeFloatingBubble()
+        hideScreenArrows()
+        removeFloatingResultCard()
         removeSettingsPanel()
+        removeFloatingBubble()
         _isOverlayRunning.value = false
     }
+
+    // ==========================================
+    // 1. FLOATING BUBBLE
+    // ==========================================
 
     @SuppressLint("ClickableViewAccessibility")
     private fun initFloatingBubble() {
@@ -155,15 +178,15 @@ class ChessLensOverlayService : Service() {
             val bg = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
                 setColor(Color.parseColor("#0F172A"))
-                setStroke((2 * density).toInt(), Color.parseColor("#38BDF8"))
+                setStroke((2.5f * density).toInt(), Color.parseColor("#38BDF8"))
             }
             background = bg
-            elevation = 12 * density
+            elevation = 16 * density
         }
 
         val knightText = TextView(this).apply {
             text = "♞"
-            textSize = 26f
+            textSize = (currentBubbleSizeDp * 0.46f).coerceAtLeast(18f)
             setTextColor(Color.parseColor("#38BDF8"))
             gravity = Gravity.CENTER
         }
@@ -184,11 +207,11 @@ class ChessLensOverlayService : Service() {
             }
             background = dotBg
         }
-        val dotSize = (10 * density).toInt()
+        val dotSize = (11 * density).toInt()
         val dotParams = FrameLayout.LayoutParams(dotSize, dotSize).apply {
             gravity = Gravity.TOP or Gravity.END
-            topMargin = (4 * density).toInt()
-            rightMargin = (4 * density).toInt()
+            topMargin = (3 * density).toInt()
+            rightMargin = (3 * density).toInt()
         }
         frame.addView(statusDot, dotParams)
 
@@ -216,11 +239,11 @@ class ChessLensOverlayService : Service() {
                 MotionEvent.ACTION_UP -> {
                     val dX = abs(event.rawX - touchStartX)
                     val dY = abs(event.rawY - touchStartY)
-                    if (dX < 10 && dY < 10) {
-                        // Single Tap! Toggle Settings / Analysis Panel
+                    if (dX < 12 && dY < 12) {
+                        // Tapped: Toggle Floating Controls & Settings Panel
                         toggleSettingsPanel()
                     } else {
-                        // Snap to nearest screen edge
+                        // Drag released: snap to nearest screen edge
                         val screenWidth = resources.displayMetrics.widthPixels
                         p.x = if (event.rawX < screenWidth / 2) 20 else (screenWidth - p.width - 20)
                         try { windowManager?.updateViewLayout(frame, p) } catch (e: Exception) {}
@@ -234,7 +257,9 @@ class ChessLensOverlayService : Service() {
         floatingBubbleView = frame
         try {
             windowManager?.addView(frame, bubbleParams)
-        } catch (e: Exception) {}
+        } catch (e: Exception) {
+            Log.e("ChessLens", "Error adding bubble view", e)
+        }
     }
 
     private fun updateBubbleAppearance() {
@@ -247,6 +272,411 @@ class ChessLensOverlayService : Service() {
             floatingBubbleView = null
         }
     }
+
+    // ==========================================
+    // 2. ARROW CANVAS OVERLAY (DRAWS DIRECTLY OVER BOARD)
+    // ==========================================
+
+    private fun showScreenArrows(
+        rect: Rect,
+        analyses: List<MoveAnalysis>,
+        avoidMoves: List<MoveAnalysis>,
+        flipped: Boolean
+    ) {
+        if (!Settings.canDrawOverlays(this)) return
+
+        if (arrowOverlayView == null) {
+            val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            } else {
+                @Suppress("DEPRECATION")
+                WindowManager.LayoutParams.TYPE_PHONE
+            }
+
+            arrowOverlayParams = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
+                layoutType,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = Gravity.TOP or Gravity.START
+                x = 0
+                y = 0
+            }
+
+            arrowOverlayView = ArrowCanvasOverlayView(this)
+            try {
+                windowManager?.addView(arrowOverlayView, arrowOverlayParams)
+            } catch (e: Exception) {
+                Log.e("ChessLens", "Error adding arrow overlay", e)
+            }
+        }
+
+        arrowOverlayView?.setAnalysisData(
+            rect = rect,
+            analysesList = analyses,
+            avoidList = avoidMoves,
+            flipped = flipped
+        )
+    }
+
+    private fun hideScreenArrows() {
+        arrowOverlayView?.clear()
+        arrowOverlayView?.let {
+            try { windowManager?.removeView(it) } catch (e: Exception) {}
+            arrowOverlayView = null
+        }
+    }
+
+    // ==========================================
+    // 3. SCREEN ANALYSIS EXECUTION (MULTI-API SIMULTANEOUS)
+    // ==========================================
+
+    private fun triggerScreenAnalysis() {
+        val accessibility = ChessLensAccessibilityService.instance
+        if (accessibility == null) {
+            Toast.makeText(this, "Accessibility permission required to analyze screen", Toast.LENGTH_LONG).show()
+            try {
+                val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                startActivity(intent)
+            } catch (e: Exception) {}
+            return
+        }
+
+        Toast.makeText(this, "Scanning screen for chessboard...", Toast.LENGTH_SHORT).show()
+
+        // 1. Accessibility node hierarchy scan (<5ms, zero battery)
+        val nodeResult = accessibility.tryReadPositionFromAccessibilityNodesWithBounds()
+        if (nodeResult != null) {
+            val effectiveBounds = if (nodeResult.bounds.width() > 60 && nodeResult.bounds.height() > 60) {
+                nodeResult.bounds
+            } else {
+                calculateDefaultScreenBounds()
+            }
+            runMultiApiAnalysis(nodeResult.position, effectiveBounds, nodeResult.isFlipped)
+            accessibility.vibrateFeedback(ChessLensAccessibilityService.FeedbackType.SUCCESS)
+            return
+        }
+
+        // 2. High-speed screen frame capture
+        accessibility.captureScreen { bitmap ->
+            if (bitmap != null) {
+                serviceScope.launch(Dispatchers.Default) {
+                    val detection = ChessLensApplication.instance.boardDetector.detectBoard(bitmap)
+                    if (detection != null) {
+                        launch(Dispatchers.Main) {
+                            runMultiApiAnalysis(detection.position, detection.bounds, detection.isFlipped)
+                            accessibility.vibrateFeedback(ChessLensAccessibilityService.FeedbackType.SUCCESS)
+                        }
+                    } else {
+                        launch(Dispatchers.Main) {
+                            Toast.makeText(
+                                this@ChessLensOverlayService,
+                                "No chessboard recognized. Use 'Demo Position' in bubble to test arrows.",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+                }
+            } else {
+                Toast.makeText(this, "Unable to capture screen. Check accessibility permissions.", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    /**
+     * Executes multiple chess engines simultaneously in parallel (Local levels + Lichess + Stockfish.online)
+     * and displays the resulting colored arrows directly on the screen!
+     */
+    private fun runMultiApiAnalysis(
+        position: ChessPosition,
+        boardBounds: Rect,
+        boardFlipped: Boolean
+    ) {
+        val app = ChessLensApplication.instance
+        val accessibility = ChessLensAccessibilityService.instance
+
+        val effectiveFlipped = if (isFlipped) !boardFlipped else boardFlipped
+        val bounds = if (boardBounds.width() > 60 && boardBounds.height() > 60) boardBounds else calculateDefaultScreenBounds()
+
+        // Configure active levels for SIMULTANEOUS execution
+        val levels = mutableListOf<AnalysisLevel>()
+        if (l1Enabled) levels.add(AnalysisLevel("l1", "Level 1", "#38BDF8", depth = 5))
+        if (l2Enabled) levels.add(AnalysisLevel("l2", "Level 2", "#2DD4BF", depth = 10))
+        if (l3Enabled) levels.add(AnalysisLevel("l3", "Level 3", "#4ADE80", depth = 14))
+
+        serviceScope.launch {
+            try {
+                // Multi-API simultaneous run
+                val results = app.evaluationEngine.analyzeMultipleLevelsSimultaneously(
+                    position = position,
+                    levels = levels,
+                    detailLevel = selectedDetailLevel,
+                    webSource = app.webAnalysisSource,
+                    includeWebApis = lichessApiEnabled || stockfishOnlineEnabled,
+                    onProgress = { interimResults ->
+                        // Progressive rendering: as fast depths return, show arrows immediately!
+                        if (!isThinkFirst || isRevealed) {
+                            showScreenArrows(bounds, interimResults, emptyList(), effectiveFlipped)
+                        }
+                    }
+                )
+
+                val avoids = if (avoidEnabled) {
+                    app.evaluationEngine.findMovesToAvoid(
+                        position = position,
+                        level = levels.firstOrNull() ?: AnalysisLevel("l1", "L1", "#38BDF8", 5)
+                    )
+                } else emptyList()
+
+                lastAnalyzedPosition = position
+                lastBounds = bounds
+                lastAnalyses = results
+                lastAvoidMoves = avoids
+
+                // Show arrows on screen (unless Think-First is pending reveal)
+                if (!isThinkFirst || isRevealed) {
+                    showScreenArrows(bounds, results, avoids, effectiveFlipped)
+                }
+
+                // Show floating result card
+                showFloatingResultCard(position, results, avoids, bounds, effectiveFlipped)
+
+                // Accessibility voice announcement
+                val topMove = results.firstOrNull()
+                if (topMove != null) {
+                    val evalStr = if (topMove.evalCentipawns > 0) "+${topMove.evalCentipawns / 100f}" else "${topMove.evalCentipawns / 100f}"
+                    accessibility?.speak("ChessLens: Recommended move ${topMove.move.san}, eval $evalStr. ${topMove.explanation}")
+                }
+            } catch (e: Exception) {
+                Log.e("ChessLens", "Error during multi-API analysis", e)
+            }
+        }
+    }
+
+    private fun calculateDefaultScreenBounds(): Rect {
+        val metrics = resources.displayMetrics
+        val w = metrics.widthPixels
+        val h = metrics.heightPixels
+        val size = min(w, (h * 0.72f).toInt())
+        val left = (w - size) / 2
+        val top = (h - size) / 2
+        return Rect(left, top, left + size, top + size)
+    }
+
+    // ==========================================
+    // 4. FLOATING RESULT CARD (MOVABLE / COLLAPSIBLE)
+    // ==========================================
+
+    @SuppressLint("SetTextI18n")
+    private fun showFloatingResultCard(
+        position: ChessPosition,
+        analyses: List<MoveAnalysis>,
+        avoidMoves: List<MoveAnalysis>,
+        bounds: Rect,
+        flipped: Boolean
+    ) {
+        if (!Settings.canDrawOverlays(this)) return
+        removeFloatingResultCard()
+
+        val density = resources.displayMetrics.density
+        val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        } else {
+            @Suppress("DEPRECATION")
+            WindowManager.LayoutParams.TYPE_PHONE
+        }
+
+        resultCardParams = WindowManager.LayoutParams(
+            (320 * density).toInt(),
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            layoutType,
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            y = (48 * density).toInt()
+        }
+
+        val top = analyses.firstOrNull()
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                cornerRadius = 16 * density
+                setColor(Color.parseColor("#0F172A"))
+                setStroke((1.5f * density).toInt(), Color.parseColor("#38BDF8"))
+            }
+            setPadding((14 * density).toInt(), (12 * density).toInt(), (14 * density).toInt(), (12 * density).toInt())
+            elevation = 18 * density
+        }
+
+        // Header with Eval badge & Close
+        val row1 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val evalBadge = TextView(this).apply {
+            val evalText = if (top != null) "${if (top.evalCentipawns > 0) "+" else ""}%.1f".format(top.evalCentipawns / 100f) else "0.0"
+            text = "Eval $evalText"
+            textSize = 12f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#38BDF8"))
+            background = GradientDrawable().apply {
+                cornerRadius = 6 * density
+                setColor(Color.parseColor("#1E293B"))
+            }
+            setPadding((8 * density).toInt(), (3 * density).toInt(), (8 * density).toInt(), (3 * density).toInt())
+        }
+        val title = TextView(this).apply {
+            text = " Best: ${top?.move?.san ?: "None"}"
+            textSize = 15f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val dismissBtn = TextView(this).apply {
+            text = "✕"
+            textSize = 17f
+            setTextColor(Color.parseColor("#94A3B8"))
+            setPadding((8 * density).toInt(), 0, (4 * density).toInt(), 0)
+            setOnClickListener {
+                hideScreenArrows()
+                removeFloatingResultCard()
+            }
+        }
+        row1.addView(evalBadge)
+        row1.addView(title)
+        row1.addView(dismissBtn)
+        card.addView(row1)
+
+        // Think-First Reveal Button if applicable
+        if (isThinkFirst && !isRevealed) {
+            val revealBtn = Button(this).apply {
+                text = "👁 Reveal Moves & Colored Arrows"
+                setTextColor(Color.parseColor("#0F172A"))
+                setTypeface(null, Typeface.BOLD)
+                background = GradientDrawable().apply {
+                    cornerRadius = 8 * density
+                    setColor(Color.parseColor("#4ADE80"))
+                }
+                setOnClickListener {
+                    isRevealed = true
+                    showScreenArrows(bounds, analyses, avoidMoves, flipped)
+                    visibility = View.GONE
+                }
+            }
+            card.addView(revealBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (38 * density).toInt()).apply {
+                topMargin = (8 * density).toInt()
+                bottomMargin = (4 * density).toInt()
+            })
+        }
+
+        // Pedagogical Move Explanation text
+        if (top != null) {
+            val expl = TextView(this).apply {
+                text = top.explanation
+                textSize = 12.5f
+                setTextColor(Color.parseColor("#E2E8F0"))
+                setPadding(0, (6 * density).toInt(), 0, (6 * density).toInt())
+            }
+            card.addView(expl)
+        }
+
+        // Avoid move warning
+        val avoid = avoidMoves.firstOrNull()
+        if (avoid != null) {
+            val avoidBox = TextView(this).apply {
+                text = "⚠ Avoid ${avoid.move.san}: ${avoid.avoidReason ?: avoid.explanation}"
+                textSize = 11.5f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(Color.parseColor("#F87171"))
+                background = GradientDrawable().apply {
+                    cornerRadius = 6 * density
+                    setColor(Color.parseColor("#261418"))
+                }
+                setPadding((8 * density).toInt(), (4 * density).toInt(), (8 * density).toInt(), (4 * density).toInt())
+            }
+            card.addView(avoidBox)
+        }
+
+        // Action row: Hide Arrows, Copy FEN, Open Studio
+        val actionRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, (8 * density).toInt(), 0, 0)
+        }
+        val hideBtn = Button(this).apply {
+            text = "Hide Arrows"
+            textSize = 11f
+            setTextColor(Color.WHITE)
+            background = GradientDrawable().apply {
+                cornerRadius = 6 * density
+                setColor(Color.parseColor("#1E293B"))
+            }
+            setOnClickListener {
+                hideScreenArrows()
+                removeFloatingResultCard()
+            }
+        }
+        val copyBtn = Button(this).apply {
+            text = "Copy FEN"
+            textSize = 11f
+            setTextColor(Color.WHITE)
+            background = GradientDrawable().apply {
+                cornerRadius = 6 * density
+                setColor(Color.parseColor("#1E293B"))
+            }
+            setOnClickListener {
+                val cb = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cb.setPrimaryClip(ClipData.newPlainText("FEN", position.toFen()))
+                Toast.makeText(this@ChessLensOverlayService, "FEN Copied!", Toast.LENGTH_SHORT).show()
+            }
+        }
+        val openAppBtn = Button(this).apply {
+            text = "Full Studio"
+            textSize = 11f
+            setTextColor(Color.parseColor("#0F172A"))
+            setTypeface(null, Typeface.BOLD)
+            background = GradientDrawable().apply {
+                cornerRadius = 6 * density
+                setColor(Color.parseColor("#38BDF8"))
+            }
+            setOnClickListener {
+                val intent = Intent(this@ChessLensOverlayService, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                }
+                startActivity(intent)
+                removeFloatingResultCard()
+            }
+        }
+        actionRow.addView(hideBtn, LinearLayout.LayoutParams(0, (32 * density).toInt(), 1f).apply { marginEnd = (4 * density).toInt() })
+        actionRow.addView(copyBtn, LinearLayout.LayoutParams(0, (32 * density).toInt(), 1f).apply { marginEnd = (4 * density).toInt() })
+        actionRow.addView(openAppBtn, LinearLayout.LayoutParams(0, (32 * density).toInt(), 1f))
+        card.addView(actionRow)
+
+        resultCardView = card
+        try {
+            windowManager?.addView(card, resultCardParams)
+        } catch (e: Exception) {
+            Log.e("ChessLens", "Error adding result card", e)
+        }
+    }
+
+    private fun removeFloatingResultCard() {
+        resultCardView?.let {
+            try { windowManager?.removeView(it) } catch (e: Exception) {}
+            resultCardView = null
+        }
+    }
+
+    // ==========================================
+    // 5. FLOATING SETTINGS & QUICK CONTROLS MODAL
+    // ==========================================
 
     private fun toggleSettingsPanel() {
         if (settingsPanelView != null) {
@@ -288,13 +718,13 @@ class ChessLensOverlayService : Service() {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             val bg = GradientDrawable().apply {
-                cornerRadius = 16 * density
+                cornerRadius = 18 * density
                 setColor(Color.parseColor("#0F172A"))
-                setStroke((1 * density).toInt(), Color.parseColor("#1E293B"))
+                setStroke((1.5f * density).toInt(), Color.parseColor("#38BDF8"))
             }
             background = bg
             setPadding((16 * density).toInt(), (16 * density).toInt(), (16 * density).toInt(), (16 * density).toInt())
-            elevation = 16 * density
+            elevation = 20 * density
         }
 
         // Header: Title & Close
@@ -320,9 +750,9 @@ class ChessLensOverlayService : Service() {
         header.addView(closeBtn)
         card.addView(header)
 
-        // Primary Action: Analyze Screen Now
+        // 1. Primary Action: Analyze Screen Now & Show Moves
         val analyzeBtn = Button(this).apply {
-            text = "⚡ Analyze Screen Now"
+            text = "⚡ Analyze Screen & Show Moves"
             setTextColor(Color.parseColor("#0F172A"))
             setTypeface(null, Typeface.BOLD)
             val btnBg = GradientDrawable().apply {
@@ -331,50 +761,92 @@ class ChessLensOverlayService : Service() {
             }
             background = btnBg
             setOnClickListener {
+                isRevealed = false
                 triggerScreenAnalysis()
                 removeSettingsPanel()
             }
         }
-        val btnParams = LinearLayout.LayoutParams(
+        card.addView(analyzeBtn, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
+            (44 * density).toInt()
         ).apply {
             topMargin = (12 * density).toInt()
-            bottomMargin = (12 * density).toInt()
+            bottomMargin = (6 * density).toInt()
+        })
+
+        // 2. Demo / Instant Test Board Button (Guarantees user sees arrows working immediately)
+        val demoBtn = Button(this).apply {
+            text = "🎯 Test Demo Board (Show Arrows Now)"
+            textSize = 12f
+            setTextColor(Color.WHITE)
+            background = GradientDrawable().apply {
+                cornerRadius = 8 * density
+                setColor(Color.parseColor("#1E293B"))
+                setStroke((1 * density).toInt(), Color.parseColor("#2DD4BF"))
+            }
+            setOnClickListener {
+                removeSettingsPanel()
+                val demoPosition = ChessPosition.fromFen("r1b1kb1r/pppp1ppp/5n2/4q3/4P3/2N5/PPP2PPP/R1BQKB1R w KQkq - 0 7")
+                    ?: ChessPosition.initial()
+                val bounds = calculateDefaultScreenBounds()
+                Toast.makeText(this@ChessLensOverlayService, "Displaying Demo Analysis Arrows on Screen!", Toast.LENGTH_SHORT).show()
+                runMultiApiAnalysis(demoPosition, bounds, isFlipped)
+            }
         }
-        card.addView(analyzeBtn, btnParams)
+        card.addView(demoBtn, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            (36 * density).toInt()
+        ).apply { bottomMargin = (8 * density).toInt() })
+
+        // Clear arrows button if active
+        if (arrowOverlayView?.hasActiveArrows() == true) {
+            val clearBtn = Button(this).apply {
+                text = "✕ Clear Arrows from Screen"
+                textSize = 12f
+                setTextColor(Color.parseColor("#F87171"))
+                background = GradientDrawable().apply {
+                    cornerRadius = 8 * density
+                    setColor(Color.parseColor("#261418"))
+                }
+                setOnClickListener {
+                    hideScreenArrows()
+                    removeFloatingResultCard()
+                    removeSettingsPanel()
+                }
+            }
+            card.addView(clearBtn, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                (36 * density).toInt()
+            ).apply { bottomMargin = (8 * density).toInt() })
+        }
 
         // Scrollable settings section
         val scrollView = ScrollView(this).apply {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                (280 * density).toInt()
+                (260 * density).toInt()
             )
         }
         val scrollContent = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
 
-        // 1. Live Continuous Analysis Switch
-        val liveRow = createToggleRow("Continuous Live Mode", isLiveMode) { checked ->
+        // Switches
+        scrollContent.addView(createToggleRow("Continuous Live Mode (Auto-Scan)", isLiveMode) { checked ->
             isLiveMode = checked
             if (checked) startLiveAnalysisLoop() else liveAnalysisJob?.cancel()
-        }
-        scrollContent.addView(liveRow)
-
-        // 2. Think-First Switch
-        val thinkFirstRow = createToggleRow("Think-First Mode", isThinkFirst) { checked ->
+        })
+        scrollContent.addView(createToggleRow("Think-First Mode (Hide until Reveal)", isThinkFirst) { checked ->
             isThinkFirst = checked
-        }
-        scrollContent.addView(thinkFirstRow)
-
-        // 3. Flip Board
-        val flipRow = createToggleRow("Flip Board (Black POV)", isFlipped) { checked ->
+        })
+        scrollContent.addView(createToggleRow("Flip Board (Black POV)", isFlipped) { checked ->
             isFlipped = checked
-        }
-        scrollContent.addView(flipRow)
+            if (lastAnalyses.isNotEmpty()) {
+                showScreenArrows(lastBounds, lastAnalyses, lastAvoidMoves, isFlipped)
+            }
+        })
 
-        // 4. Simultaneous Multi-API Levels Section
+        // Simultaneous Multi-API Levels Section
         val apiHeader = TextView(this).apply {
             text = "Simultaneous Multi-API / Levels:"
             textSize = 12f
@@ -384,14 +856,14 @@ class ChessLensOverlayService : Service() {
         }
         scrollContent.addView(apiHeader)
 
-        scrollContent.addView(createToggleRow("Level 1: Depth 5 (Blue)", l1Enabled) { l1Enabled = it })
-        scrollContent.addView(createToggleRow("Level 2: Depth 10 (Teal)", l2Enabled) { l2Enabled = it })
-        scrollContent.addView(createToggleRow("Level 3: Depth 14 (Green)", l3Enabled) { l3Enabled = it })
-        scrollContent.addView(createToggleRow("Lichess Cloud API", lichessApiEnabled) { lichessApiEnabled = it })
+        scrollContent.addView(createToggleRow("Level 1: Depth 5 (Blue Arrow)", l1Enabled) { l1Enabled = it })
+        scrollContent.addView(createToggleRow("Level 2: Depth 10 (Teal Arrow)", l2Enabled) { l2Enabled = it })
+        scrollContent.addView(createToggleRow("Level 3: Depth 14 (Green Arrow)", l3Enabled) { l3Enabled = it })
+        scrollContent.addView(createToggleRow("Lichess Cloud Database API", lichessApiEnabled) { lichessApiEnabled = it })
         scrollContent.addView(createToggleRow("Stockfish Online API", stockfishOnlineEnabled) { stockfishOnlineEnabled = it })
-        scrollContent.addView(createToggleRow("Moves to Avoid (Red)", avoidEnabled) { avoidEnabled = it })
+        scrollContent.addView(createToggleRow("Moves to Avoid (Red Dashed Arrow)", avoidEnabled) { avoidEnabled = it })
 
-        // 5. Bubble Size selector
+        // Bubble Size selector
         val sizeHeader = TextView(this).apply {
             text = "Floating Bubble Size:"
             textSize = 12f
@@ -429,7 +901,7 @@ class ChessLensOverlayService : Service() {
         }
         scrollContent.addView(sizeRow)
 
-        // 6. Bubble Opacity
+        // Bubble Opacity selector
         val alphaHeader = TextView(this).apply {
             text = "Floating Bubble Opacity:"
             textSize = 12f
@@ -470,13 +942,38 @@ class ChessLensOverlayService : Service() {
         scrollView.addView(scrollContent)
         card.addView(scrollView)
 
+        // Quick Launch: Chess.com Browser
+        val openBrowserBtn = Button(this).apply {
+            text = "🌐 Open Chess.com Browser"
+            textSize = 12f
+            setTextColor(Color.parseColor("#0F172A"))
+            setTypeface(null, Typeface.BOLD)
+            background = GradientDrawable().apply {
+                cornerRadius = 8 * density
+                setColor(Color.parseColor("#2DD4BF"))
+            }
+            setOnClickListener {
+                val intent = Intent(this@ChessLensOverlayService, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                }
+                startActivity(intent)
+                removeSettingsPanel()
+            }
+        }
+        card.addView(openBrowserBtn, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            (36 * density).toInt()
+        ).apply {
+            topMargin = (10 * density).toInt()
+        })
+
         // Footer buttons: Open App & Close
         val footer = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, (12 * density).toInt(), 0, 0)
+            setPadding(0, (8 * density).toInt(), 0, 0)
         }
         val openAppBtn = Button(this).apply {
-            text = "Open Full App"
+            text = "Full Studio"
             textSize = 12f
             setTextColor(Color.WHITE)
             background = GradientDrawable().apply {
@@ -504,14 +1001,16 @@ class ChessLensOverlayService : Service() {
                 stopSelf()
             }
         }
-        footer.addView(openAppBtn, LinearLayout.LayoutParams(0, (38 * density).toInt(), 1f).apply { marginEnd = (6 * density).toInt() })
-        footer.addView(closeFloatingBtn, LinearLayout.LayoutParams(0, (38 * density).toInt(), 1f))
+        footer.addView(openAppBtn, LinearLayout.LayoutParams(0, (36 * density).toInt(), 1f).apply { marginEnd = (6 * density).toInt() })
+        footer.addView(closeFloatingBtn, LinearLayout.LayoutParams(0, (36 * density).toInt(), 1f))
         card.addView(footer)
 
         settingsPanelView = card
         try {
             windowManager?.addView(card, settingsPanelParams)
-        } catch (e: Exception) {}
+        } catch (e: Exception) {
+            Log.e("ChessLens", "Error adding settings panel", e)
+        }
     }
 
     private fun updateBubbleSize(sizeDp: Int) {
@@ -533,7 +1032,7 @@ class ChessLensOverlayService : Service() {
 
             val tv = TextView(this@ChessLensOverlayService).apply {
                 text = label
-                textSize = 13f
+                textSize = 12.5f
                 setTextColor(Color.WHITE)
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             }
@@ -546,252 +1045,11 @@ class ChessLensOverlayService : Service() {
         }
     }
 
-    private fun triggerScreenAnalysis() {
-        val accessibility = ChessLensAccessibilityService.instance
-        if (accessibility == null) {
-            Toast.makeText(this, "Enable ChessLens in Accessibility Settings to read screen", Toast.LENGTH_LONG).show()
-            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK
-            }
-            startActivity(intent)
-            return
-        }
-
-        // Accessibility Improvement: Check accessibility node hierarchy first (<5ms, zero battery)
-        val nodePosition = accessibility.tryReadPositionFromAccessibilityNodes()
-        if (nodePosition != null) {
-            runMultiApiAnalysis(nodePosition)
-            accessibility.vibrateFeedback(ChessLensAccessibilityService.FeedbackType.SUCCESS)
-            return
-        }
-
-        // Fallback: take screenshot on API 30+
-        accessibility.captureScreen { bitmap ->
-            if (bitmap != null) {
-                serviceScope.launch(Dispatchers.Default) {
-                    val detection = ChessLensApplication.instance.boardDetector.detectBoard(bitmap)
-                    if (detection != null) {
-                        launch(Dispatchers.Main) {
-                            runMultiApiAnalysis(detection.position)
-                            accessibility.vibrateFeedback(ChessLensAccessibilityService.FeedbackType.SUCCESS)
-                        }
-                    } else {
-                        launch(Dispatchers.Main) {
-                            Toast.makeText(this@ChessLensOverlayService, "No chessboard detected on screen", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                }
-            } else {
-                Toast.makeText(this, "Could not capture screen frame", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
-    private fun runMultiApiAnalysis(position: ChessPosition) {
-        val app = ChessLensApplication.instance
-        val accessibility = ChessLensAccessibilityService.instance
-
-        // Configure active levels for SIMULTANEOUS execution
-        val levels = mutableListOf<AnalysisLevel>()
-        if (l1Enabled) levels.add(AnalysisLevel("l1", "Level 1", "#38BDF8", depth = 5))
-        if (l2Enabled) levels.add(AnalysisLevel("l2", "Level 2", "#2DD4BF", depth = 10))
-        if (l3Enabled) levels.add(AnalysisLevel("l3", "Level 3", "#4ADE80", depth = 14))
-
-        serviceScope.launch {
-            try {
-                // Multi-API simultaneous run
-                val results = app.evaluationEngine.analyzeMultipleLevelsSimultaneously(
-                    position = position,
-                    levels = levels,
-                    detailLevel = selectedDetailLevel,
-                    webSource = app.webAnalysisSource,
-                    includeWebApis = lichessApiEnabled || stockfishOnlineEnabled
-                )
-
-                val avoids = if (avoidEnabled) {
-                    app.evaluationEngine.findMovesToAvoid(position, levels.firstOrNull() ?: AnalysisLevel("l1", "L1", "#38BDF8", 5))
-                } else emptyList()
-
-                lastAnalyzedPosition = position
-                lastAnalyses = results
-                lastAvoidMoves = avoids
-
-                // Show floating result card
-                showFloatingResultCard(position, results, avoids)
-
-                // Accessibility voice announcement
-                val topMove = results.firstOrNull()
-                if (topMove != null) {
-                    val evalStr = if (topMove.evalCentipawns > 0) "+${topMove.evalCentipawns / 100f}" else "${topMove.evalCentipawns / 100f}"
-                    accessibility?.speak("ChessLens: Recommended move is ${topMove.move.san}, evaluation $evalStr. ${topMove.explanation}")
-                }
-            } catch (e: Exception) {}
-        }
-    }
-
-    private var resultCardView: View? = null
-
-    private fun showFloatingResultCard(
-        position: ChessPosition,
-        analyses: List<MoveAnalysis>,
-        avoidMoves: List<MoveAnalysis>
-    ) {
-        if (!Settings.canDrawOverlays(this)) return
-        removeFloatingResultCard()
-
-        val density = resources.displayMetrics.density
-        val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        } else {
-            @Suppress("DEPRECATION")
-            WindowManager.LayoutParams.TYPE_PHONE
-        }
-
-        val cardParams = WindowManager.LayoutParams(
-            (320 * density).toInt(),
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            layoutType,
-            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-            y = (60 * density).toInt()
-        }
-
-        val top = analyses.firstOrNull()
-        val card = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = GradientDrawable().apply {
-                cornerRadius = 14 * density
-                setColor(Color.parseColor("#0F172A"))
-                setStroke((1 * density).toInt(), Color.parseColor("#38BDF8"))
-            }
-            setPadding((14 * density).toInt(), (12 * density).toInt(), (14 * density).toInt(), (12 * density).toInt())
-            elevation = 16 * density
-        }
-
-        // Header with Eval badge & Close
-        val row1 = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        val evalBadge = TextView(this).apply {
-            val evalText = if (top != null) "${if (top.evalCentipawns > 0) "+" else ""}%.1f".format(top.evalCentipawns / 100f) else "0.0"
-            text = "Eval $evalText"
-            textSize = 12f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#38BDF8"))
-            background = GradientDrawable().apply {
-                cornerRadius = 6 * density
-                setColor(Color.parseColor("#1E293B"))
-            }
-            setPadding((8 * density).toInt(), (3 * density).toInt(), (8 * density).toInt(), (3 * density).toInt())
-        }
-        val title = TextView(this).apply {
-            text = " Best: ${top?.move?.san ?: "None"}"
-            textSize = 15f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.WHITE)
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        }
-        val dismissBtn = TextView(this).apply {
-            text = "✕"
-            textSize = 16f
-            setTextColor(Color.parseColor("#94A3B8"))
-            setPadding((6 * density).toInt(), 0, (6 * density).toInt(), 0)
-            setOnClickListener { removeFloatingResultCard() }
-        }
-        row1.addView(evalBadge)
-        row1.addView(title)
-        row1.addView(dismissBtn)
-        card.addView(row1)
-
-        // Explanation text
-        if (top != null) {
-            val expl = TextView(this).apply {
-                text = top.explanation
-                textSize = 12f
-                setTextColor(Color.parseColor("#E2E8F0"))
-                setPadding(0, (6 * density).toInt(), 0, (6 * density).toInt())
-            }
-            card.addView(expl)
-        }
-
-        // Avoid move warning (if any)
-        val avoid = avoidMoves.firstOrNull()
-        if (avoid != null) {
-            val avoidBox = TextView(this).apply {
-                text = "⚠ Avoid ${avoid.move.san}: ${avoid.avoidReason ?: avoid.explanation}"
-                textSize = 11f
-                setTypeface(null, Typeface.BOLD)
-                setTextColor(Color.parseColor("#F87171"))
-                background = GradientDrawable().apply {
-                    cornerRadius = 6 * density
-                    setColor(Color.parseColor("#261418"))
-                }
-                setPadding((8 * density).toInt(), (4 * density).toInt(), (8 * density).toInt(), (4 * density).toInt())
-            }
-            card.addView(avoidBox)
-        }
-
-        // Action row: Copy FEN & Open in App
-        val actionRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, (8 * density).toInt(), 0, 0)
-        }
-        val copyBtn = Button(this).apply {
-            text = "Copy FEN"
-            textSize = 11f
-            setTextColor(Color.WHITE)
-            background = GradientDrawable().apply {
-                cornerRadius = 6 * density
-                setColor(Color.parseColor("#1E293B"))
-            }
-            setOnClickListener {
-                val cb = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                cb.setPrimaryClip(ClipData.newPlainText("FEN", position.toFen()))
-                Toast.makeText(this@ChessLensOverlayService, "FEN Copied!", Toast.LENGTH_SHORT).show()
-            }
-        }
-        val openAppBtn = Button(this).apply {
-            text = "Full Studio"
-            textSize = 11f
-            setTextColor(Color.parseColor("#0F172A"))
-            setTypeface(null, Typeface.BOLD)
-            background = GradientDrawable().apply {
-                cornerRadius = 6 * density
-                setColor(Color.parseColor("#38BDF8"))
-            }
-            setOnClickListener {
-                val intent = Intent(this@ChessLensOverlayService, MainActivity::class.java).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                }
-                startActivity(intent)
-                removeFloatingResultCard()
-            }
-        }
-        actionRow.addView(copyBtn, LinearLayout.LayoutParams(0, (32 * density).toInt(), 1f).apply { marginEnd = (6 * density).toInt() })
-        actionRow.addView(openAppBtn, LinearLayout.LayoutParams(0, (32 * density).toInt(), 1f))
-        card.addView(actionRow)
-
-        resultCardView = card
-        try {
-            windowManager?.addView(card, cardParams)
-        } catch (e: Exception) {}
-    }
-
-    private fun removeFloatingResultCard() {
-        resultCardView?.let {
-            try { windowManager?.removeView(it) } catch (e: Exception) {}
-            resultCardView = null
-        }
-    }
-
     private fun startLiveAnalysisLoop() {
         liveAnalysisJob?.cancel()
         liveAnalysisJob = serviceScope.launch {
             while (isActive && isLiveMode) {
-                delay(2000)
+                delay(2500)
                 if (!_isPaused.value) {
                     triggerScreenAnalysis()
                 }
@@ -866,6 +1124,7 @@ class ChessLensOverlayService : Service() {
         const val NOTIFICATION_ID = 1001
 
         const val ACTION_ANALYZE_NOW = "com.example.chesslens.ACTION_ANALYZE_NOW"
+        const val ACTION_CLEAR_ARROWS = "com.example.chesslens.ACTION_CLEAR_ARROWS"
         const val ACTION_PAUSE = "com.example.chesslens.ACTION_PAUSE"
         const val ACTION_RESUME = "com.example.chesslens.ACTION_RESUME"
         const val ACTION_STOP = "com.example.chesslens.ACTION_STOP"
@@ -875,8 +1134,5 @@ class ChessLensOverlayService : Service() {
 
         private val _isPaused = MutableStateFlow(false)
         val isPaused: StateFlow<Boolean> = _isPaused.asStateFlow()
-
-        private val _lastCapturedBitmap = MutableStateFlow<android.graphics.Bitmap?>(null)
-        val lastCapturedBitmap: StateFlow<android.graphics.Bitmap?> = _lastCapturedBitmap.asStateFlow()
     }
 }

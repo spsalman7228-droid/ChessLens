@@ -437,7 +437,7 @@ fun DashboardScreen(
                                     }
                                     val intent = Intent(context, ChessLensOverlayService::class.java)
                                     if (active) {
-                                        context.startService(intent)
+                                        androidx.core.content.ContextCompat.startForegroundService(context, intent)
                                     } else {
                                         intent.action = ChessLensOverlayService.ACTION_STOP
                                         context.startService(intent)
@@ -461,7 +461,7 @@ fun DashboardScreen(
                                     val intent = Intent(context, ChessLensOverlayService::class.java).apply {
                                         action = ChessLensOverlayService.ACTION_ANALYZE_NOW
                                     }
-                                    context.startService(intent)
+                                    androidx.core.content.ContextCompat.startForegroundService(context, intent)
                                 },
                                 colors = ButtonDefaults.buttonColors(containerColor = Slate800),
                                 shape = RoundedCornerShape(10.dp),
