@@ -132,6 +132,7 @@ fun ChessLensNavHost(
 
         composable("dashboard") {
             DashboardScreen(
+                onNavigateToBrowser = { navController.navigate("browser") },
                 onNavigateToAnalysis = { fen ->
                     if (fen != null) {
                         val encoded = URLEncoder.encode(fen, "UTF-8")
@@ -145,6 +146,13 @@ fun ChessLensNavHost(
                 onNavigateToHistory = { navController.navigate("history") },
                 onNavigateToSettings = { navController.navigate("settings") },
                 onImageImported = { uri -> processImageUri(uri) }
+            )
+        }
+
+        composable("browser") {
+            com.example.ui.screens.ChessBrowserScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onOpenDrawer = { navController.popBackStack() }
             )
         }
 

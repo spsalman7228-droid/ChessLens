@@ -32,7 +32,9 @@ import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Psychology
@@ -43,10 +45,16 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.NavigationDrawerItem
+import androidx.compose.material3.NavigationDrawerItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -54,6 +62,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -82,6 +91,7 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DashboardScreen(
+    onNavigateToBrowser: () -> Unit,
     onNavigateToAnalysis: (String?) -> Unit,
     onNavigateToVideo: () -> Unit,
     onNavigateToPuzzles: () -> Unit,
@@ -92,6 +102,7 @@ fun DashboardScreen(
     val context = LocalContext.current
     val app = ChessLensApplication.instance
     val scope = rememberCoroutineScope()
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
 
     val overlayActive by app.preferencesManager.overlayActive.collectAsState(initial = false)
     val isAccessibilityRunning by ChessLensAccessibilityService.isServiceRunning.collectAsState()
@@ -107,285 +118,498 @@ fun DashboardScreen(
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet(
+                drawerContainerColor = Slate900,
+                modifier = Modifier.width(300.dp)
+            ) {
+                // Drawer Header
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Slate950)
+                        .padding(20.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(ChessLensCyan.copy(alpha = 0.2f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("♞", fontSize = 26.sp, color = ChessLensCyan)
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "ChessLens",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                    Text(
+                        text = "Multi-API Visual Analysis",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                HorizontalDivider(color = Slate800)
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Feature: Chess.com Browser with Extension
+                NavigationDrawerItem(
+                    label = { Text("Chess.com Browser", fontWeight = FontWeight.Bold) },
+                    icon = { Icon(Icons.Default.Language, contentDescription = null, tint = ChessLensCyan) },
+                    badge = {
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = ChessLensCyan.copy(alpha = 0.2f)
+                        ) {
+                            Text(
+                                text = "Extension Injected",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = ChessLensCyan,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    },
+                    selected = false,
+                    onClick = {
+                        scope.launch { drawerState.close() }
+                        onNavigateToBrowser()
+                    },
+                    colors = NavigationDrawerItemDefaults.colors(
+                        unselectedContainerColor = Color.Transparent,
+                        unselectedTextColor = Color.White
+                    )
+                )
+
+                NavigationDrawerItem(
+                    label = { Text("Analysis Studio") },
+                    icon = { Icon(Icons.Default.Layers, contentDescription = null, tint = Color.White) },
+                    selected = false,
+                    onClick = {
+                        scope.launch { drawerState.close() }
+                        onNavigateToAnalysis(null)
+                    },
+                    colors = NavigationDrawerItemDefaults.colors(
+                        unselectedContainerColor = Color.Transparent,
+                        unselectedTextColor = Color.White
+                    )
+                )
+
+                NavigationDrawerItem(
+                    label = { Text("Video Analysis") },
+                    icon = { Icon(Icons.Default.Videocam, contentDescription = null, tint = Color.White) },
+                    selected = false,
+                    onClick = {
+                        scope.launch { drawerState.close() }
+                        onNavigateToVideo()
+                    },
+                    colors = NavigationDrawerItemDefaults.colors(
+                        unselectedContainerColor = Color.Transparent,
+                        unselectedTextColor = Color.White
+                    )
+                )
+
+                NavigationDrawerItem(
+                    label = { Text("Tactical Puzzles") },
+                    icon = { Icon(Icons.Default.Psychology, contentDescription = null, tint = Color.White) },
+                    selected = false,
+                    onClick = {
+                        scope.launch { drawerState.close() }
+                        onNavigateToPuzzles()
+                    },
+                    colors = NavigationDrawerItemDefaults.colors(
+                        unselectedContainerColor = Color.Transparent,
+                        unselectedTextColor = Color.White
+                    )
+                )
+
+                NavigationDrawerItem(
+                    label = { Text("Analysis History") },
+                    icon = { Icon(Icons.Default.History, contentDescription = null, tint = Color.White) },
+                    selected = false,
+                    onClick = {
+                        scope.launch { drawerState.close() }
+                        onNavigateToHistory()
+                    },
+                    colors = NavigationDrawerItemDefaults.colors(
+                        unselectedContainerColor = Color.Transparent,
+                        unselectedTextColor = Color.White
+                    )
+                )
+
+                HorizontalDivider(color = Slate800, modifier = Modifier.padding(vertical = 8.dp))
+
+                NavigationDrawerItem(
+                    label = { Text("Settings") },
+                    icon = { Icon(Icons.Default.Settings, contentDescription = null, tint = Color.White) },
+                    selected = false,
+                    onClick = {
+                        scope.launch { drawerState.close() }
+                        onNavigateToSettings()
+                    },
+                    colors = NavigationDrawerItemDefaults.colors(
+                        unselectedContainerColor = Color.Transparent,
+                        unselectedTextColor = Color.White
+                    )
+                )
+            }
+        }
+    ) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(ChessLensCyan.copy(alpha = 0.2f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("♞", fontSize = 20.sp, color = ChessLensCyan)
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                text = "ChessLens",
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        }
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                            Icon(Icons.Default.Menu, contentDescription = "Menu Drawer", tint = Color.White)
+                        }
+                    },
+                    actions = {
+                        IconButton(onClick = onNavigateToBrowser) {
+                            Icon(Icons.Default.Language, contentDescription = "Chess.com Browser", tint = ChessLensCyan)
+                        }
+                        IconButton(onClick = onNavigateToHistory) {
+                            Icon(Icons.Default.History, contentDescription = "History", tint = Color.White)
+                        }
+                        IconButton(onClick = onNavigateToSettings) {
+                            Icon(Icons.Default.Settings, contentDescription = "Settings", tint = Color.White)
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Slate950)
+                )
+            },
+            containerColor = Slate950
+        ) { innerPadding ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .verticalScroll(rememberScrollState())
+                    .padding(16.dp)
+            ) {
+                // Health Panel (Green/Red indicators with one-tap fixes)
+                HealthPanel(
+                    isAccessibilityOk = isAccessibilityRunning,
+                    isOverlayOk = isOverlayServiceRunning || Settings.canDrawOverlays(context),
+                    isEngineOk = true,
+                    onFixAccessibility = {
+                        try {
+                            context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                        } catch (e: Exception) {}
+                    },
+                    onFixOverlay = {
+                        if (!Settings.canDrawOverlays(context)) {
+                            try {
+                                val intent = Intent(
+                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                    Uri.parse("package:${context.packageName}")
+                                )
+                                context.startActivity(intent)
+                            } catch (e: Exception) {}
+                        }
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Chess.com In-App Browser Feature Card
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = Slate900),
+                    border = CardDefaults.outlinedCardBorder().copy(width = 1.dp, brush = androidx.compose.ui.graphics.SolidColor(ChessLensCyan)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onNavigateToBrowser)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Box(
                             modifier = Modifier
-                                .size(34.dp)
-                                .clip(RoundedCornerShape(8.dp))
+                                .size(48.dp)
+                                .clip(RoundedCornerShape(12.dp))
                                 .background(ChessLensCyan.copy(alpha = 0.2f)),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text("♞", fontSize = 20.sp, color = ChessLensCyan)
+                            Icon(Icons.Default.Language, contentDescription = null, tint = ChessLensCyan, modifier = Modifier.size(28.dp))
                         }
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = "ChessLens",
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
-                    }
-                },
-                actions = {
-                    IconButton(onClick = onNavigateToHistory) {
-                        Icon(Icons.Default.History, contentDescription = "History", tint = Color.White)
-                    }
-                    IconButton(onClick = onNavigateToSettings) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings", tint = Color.White)
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Slate950)
-            )
-        },
-        containerColor = Slate950
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp)
-        ) {
-            // Health Panel (Green/Red indicators with one-tap fixes)
-            HealthPanel(
-                isAccessibilityOk = isAccessibilityRunning,
-                isOverlayOk = isOverlayServiceRunning || Settings.canDrawOverlays(context),
-                isEngineOk = true,
-                onFixAccessibility = {
-                    try {
-                        context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                    } catch (e: Exception) {}
-                },
-                onFixOverlay = {
-                    if (!Settings.canDrawOverlays(context)) {
-                        try {
-                            val intent = Intent(
-                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                Uri.parse("package:${context.packageName}")
+                        Spacer(modifier = Modifier.width(14.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "Chess.com Browser",
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(4.dp),
+                                    color = Color(0xFF16A34A).copy(alpha = 0.2f)
+                                ) {
+                                    Text(
+                                        text = "Multi-API Extension",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF4ADE80),
+                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Dedicated chess.com web view with injected simultaneous multi-depth arrows & Lichess opening database.",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            context.startActivity(intent)
-                        } catch (e: Exception) {}
+                        }
+                        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = ChessLensCyan)
                     }
                 }
-            )
 
-            Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
-            // Main "On The Screen" Master Control Card
-            Card(
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = Slate900),
-                border = CardDefaults.outlinedCardBorder().copy(width = 1.dp, brush = androidx.compose.ui.graphics.SolidColor(ChessLensCyan.copy(alpha = 0.4f))),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
+                // Main "On The Screen" Master Control Card
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = Slate900),
+                    border = CardDefaults.outlinedCardBorder().copy(width = 1.dp, brush = androidx.compose.ui.graphics.SolidColor(ChessLensCyan.copy(alpha = 0.4f))),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text(
+                                    text = "Floating Screen Overlay",
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                                Text(
+                                    text = if (isOverlayServiceRunning) "Active • Floating icon stays on screen even when app is closed" else "Small floating icon on top of videos & apps with full settings",
+                                    fontSize = 12.sp,
+                                    color = if (isOverlayServiceRunning) ChessLensGreen else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+
+                            Switch(
+                                checked = isOverlayServiceRunning,
+                                onCheckedChange = { active ->
+                                    if (active && !Settings.canDrawOverlays(context)) {
+                                        try {
+                                            val intent = Intent(
+                                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                                Uri.parse("package:${context.packageName}")
+                                            )
+                                            context.startActivity(intent)
+                                        } catch (e: Exception) {}
+                                    }
+                                    val intent = Intent(context, ChessLensOverlayService::class.java)
+                                    if (active) {
+                                        context.startService(intent)
+                                    } else {
+                                        intent.action = ChessLensOverlayService.ACTION_STOP
+                                        context.startService(intent)
+                                    }
+                                    scope.launch {
+                                        app.preferencesManager.setOverlayActive(active)
+                                    }
+                                },
+                                colors = SwitchDefaults.colors(checkedThumbColor = Slate900, checkedTrackColor = ChessLensCyan)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = {
+                                    val intent = Intent(context, ChessLensOverlayService::class.java).apply {
+                                        action = ChessLensOverlayService.ACTION_ANALYZE_NOW
+                                    }
+                                    context.startService(intent)
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Slate800),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.Visibility, contentDescription = null, tint = ChessLensCyan, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Snapshot Screen", fontSize = 12.sp, color = Color.White)
+                            }
+
+                            Button(
+                                onClick = { imagePickerLauncher.launch("image/*") },
+                                colors = ButtonDefaults.buttonColors(containerColor = Slate800),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.Image, contentDescription = null, tint = ChessLensCyan, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Import Photo", fontSize = 12.sp, color = Color.White)
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                // Primary Feature Hub
+                Text(
+                    text = "Analysis Hub",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+
+                FeatureCard(
+                    title = "Interactive Analysis Board",
+                    subtitle = "Study positions, test lines, and view multi-level engine arrows",
+                    icon = Icons.Default.Layers,
+                    iconTint = ChessLensCyan,
+                    onClick = { onNavigateToAnalysis(null) }
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                FeatureCard(
+                    title = "Video Timeline Analysis",
+                    subtitle = "Timeline scrubber, eval graph over time, and blunder moments",
+                    icon = Icons.Default.Videocam,
+                    iconTint = Color(0xFFFBBF24),
+                    onClick = onNavigateToVideo
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                FeatureCard(
+                    title = "Tactical Puzzles & Think-First",
+                    subtitle = "Sharpen calculation skills with pedagogical hints and scoring",
+                    icon = Icons.Default.Psychology,
+                    iconTint = Color(0xFF4ADE80),
+                    onClick = onNavigateToPuzzles
+                )
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                // Active Engine Levels strip
+                Text(
+                    text = "Simultaneous Multi-API / Levels (Live)",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.outline
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    LevelBadge(name = "L1 Blue", depth = "d5", color = Color(0xFF38BDF8), modifier = Modifier.weight(1f))
+                    LevelBadge(name = "L2 Teal", depth = "d10", color = Color(0xFF2DD4BF), modifier = Modifier.weight(1f))
+                    LevelBadge(name = "L3 Green", depth = "d14", color = Color(0xFF4ADE80), modifier = Modifier.weight(1f))
+                    LevelBadge(name = "Lichess", depth = "API", color = Color(0xFF5AA4FF), modifier = Modifier.weight(1f))
+                    LevelBadge(name = "Avoid", depth = "Red", color = Color(0xFFF87171), modifier = Modifier.weight(1f))
+                }
+
+                // Recent Analysis Card
+                if (recentHistory.isNotEmpty()) {
+                    val latest = recentHistory.first()
+                    Spacer(modifier = Modifier.height(20.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
-                            Text(
-                                text = "Floating Screen Overlay",
-                                fontSize = 18.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                            Text(
-                                text = if (isOverlayServiceRunning) "Active • Floating icon stays on screen even when app is closed" else "Small floating icon on top of videos & apps with full settings",
-                                fontSize = 12.sp,
-                                color = if (isOverlayServiceRunning) ChessLensGreen else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-
-                        Switch(
-                            checked = isOverlayServiceRunning,
-                            onCheckedChange = { active ->
-                                if (active && !Settings.canDrawOverlays(context)) {
-                                    try {
-                                        val intent = Intent(
-                                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                            Uri.parse("package:${context.packageName}")
-                                        )
-                                        context.startActivity(intent)
-                                    } catch (e: Exception) {}
-                                }
-                                val intent = Intent(context, ChessLensOverlayService::class.java)
-                                if (active) {
-                                    context.startService(intent)
-                                } else {
-                                    intent.action = ChessLensOverlayService.ACTION_STOP
-                                    context.startService(intent)
-                                }
-                                scope.launch {
-                                    app.preferencesManager.setOverlayActive(active)
-                                }
-                            },
-                            colors = SwitchDefaults.colors(checkedThumbColor = Slate900, checkedTrackColor = ChessLensCyan)
+                        Text(
+                            text = "Recent Analysis",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                        Text(
+                            text = "View All",
+                            fontSize = 13.sp,
+                            color = ChessLensCyan,
+                            modifier = Modifier.clickable { onNavigateToHistory() }
                         )
                     }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Button(
-                            onClick = {
-                                val intent = Intent(context, ChessLensOverlayService::class.java).apply {
-                                    action = ChessLensOverlayService.ACTION_ANALYZE_NOW
-                                }
-                                context.startService(intent)
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Slate800),
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Default.Visibility, contentDescription = null, tint = ChessLensCyan, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Snapshot Screen", fontSize = 12.sp, color = Color.White)
-                        }
-
-                        Button(
-                            onClick = { imagePickerLauncher.launch("image/*") },
-                            colors = ButtonDefaults.buttonColors(containerColor = Slate800),
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Default.Image, contentDescription = null, tint = ChessLensCyan, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Import Photo", fontSize = 12.sp, color = Color.White)
-                        }
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(20.dp))
-
-            // Primary Feature Hub
-            Text(
-                text = "Analysis Hub",
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.White
-            )
-            Spacer(modifier = Modifier.height(10.dp))
-
-            FeatureCard(
-                title = "Interactive Analysis Board",
-                subtitle = "Study positions, test lines, and view multi-level engine arrows",
-                icon = Icons.Default.Layers,
-                iconTint = ChessLensCyan,
-                onClick = { onNavigateToAnalysis(null) }
-            )
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            FeatureCard(
-                title = "Video Timeline Analysis",
-                subtitle = "Timeline scrubber, eval graph over time, and blunder moments",
-                icon = Icons.Default.Videocam,
-                iconTint = Color(0xFFFBBF24),
-                onClick = onNavigateToVideo
-            )
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            FeatureCard(
-                title = "Tactical Puzzles & Think-First",
-                subtitle = "Sharpen calculation skills with pedagogical hints and scoring",
-                icon = Icons.Default.Psychology,
-                iconTint = Color(0xFF4ADE80),
-                onClick = onNavigateToPuzzles
-            )
-
-            Spacer(modifier = Modifier.height(20.dp))
-
-            // Active Engine Levels strip
-            Text(
-                text = "Engine Levels (Stockfish / Lichess)",
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.outline
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                LevelBadge(name = "L1 Blue", depth = "d5", color = Color(0xFF38BDF8), modifier = Modifier.weight(1f))
-                LevelBadge(name = "L2 Teal", depth = "d10", color = Color(0xFF2DD4BF), modifier = Modifier.weight(1f))
-                LevelBadge(name = "L3 Green", depth = "d15", color = Color(0xFF4ADE80), modifier = Modifier.weight(1f))
-                LevelBadge(name = "Avoid", depth = "Red", color = Color(0xFFF87171), modifier = Modifier.weight(1f))
-            }
-
-            // Recent Analysis Card
-            if (recentHistory.isNotEmpty()) {
-                val latest = recentHistory.first()
-                Spacer(modifier = Modifier.height(20.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Recent Analysis",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
-                    )
-                    Text(
-                        text = "View All",
-                        fontSize = 13.sp,
-                        color = ChessLensCyan,
-                        modifier = Modifier.clickable { onNavigateToHistory() }
-                    )
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Card(
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = Slate900),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onNavigateToAnalysis(latest.fen) }
-                ) {
-                    Row(
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Card(
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = Slate900),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                            .clickable { onNavigateToAnalysis(latest.fen) }
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Best Move: ${latest.bestMoveSan}",
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White,
-                                fontSize = 15.sp
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = latest.explanation,
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1
-                            )
-                        }
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = Slate800
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Text(
-                                text = "${if (latest.evalCentipawns > 0) "+" else ""}%.1f".format(latest.evalCentipawns / 100f),
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = ChessLensCyan,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Best Move: ${latest.bestMoveSan}",
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White,
+                                    fontSize = 15.sp
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = latest.explanation,
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1
+                                )
+                            }
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = Slate800
+                            ) {
+                                Text(
+                                    text = "${if (latest.evalCentipawns > 0) "+" else ""}%.1f".format(latest.evalCentipawns / 100f),
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = ChessLensCyan,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
                         }
                     }
                 }
