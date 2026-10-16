@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">ChessLens</string>
+    <string name="accessibility_service_label">ChessLens Screen Analysis</string>
+    <string name="accessibility_service_description">Locates chessboard positions on your screen when you request analysis, showing move suggestions and instructional explanations. Processed entirely on-device.</string>
+    <string name="quick_settings_tile_label">Analyze Screen</string>
+    <string name="notification_channel_name">ChessLens Overlay Service</string>
+    <string name="notification_channel_desc">Shows controls for ChessLens floating bubble and screen analysis.</string>
+    <string name="notification_title">ChessLens is Active</string>
+    <string name="notification_text">Tap to analyze current screen or pause overlay.</string>
+    <string name="action_analyze_now">Analyze Now</string>
+    <string name="action_pause">Pause</string>
+    <string name="action_resume">Resume</string>
+</resources>

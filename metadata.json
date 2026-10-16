@@ -1,0 +1,8 @@
+{
+  "name": "ChessLens",
+  "description": "Chess learning and analysis tool with on-screen board recognition, multi-level engine arrows, move quality feedback, and video timeline analysis.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
