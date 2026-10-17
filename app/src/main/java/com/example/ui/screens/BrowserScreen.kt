@@ -92,7 +92,7 @@ import org.json.JSONObject
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ChessBrowserScreen(
+fun BrowserScreen(
     onNavigateBack: () -> Unit,
     onNavigateToAnalysis: () -> Unit = {},
     onNavigateToVideo: () -> Unit = {},
@@ -106,10 +106,12 @@ fun ChessBrowserScreen(
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
 
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
+    var currentUrl by remember { mutableStateOf("https://www.google.com") }
+    var isDesktop by remember { mutableStateOf(false) }
     var pageLoadingProgress by remember { mutableFloatStateOf(0f) }
     var isPageLoading by remember { mutableStateOf(true) }
 
-    // Multi-API level toggles
+    // Multi-API level toggles (kept for chess feature)
     var useL1 by remember { mutableStateOf(true) }
     var useL2 by remember { mutableStateOf(true) }
     var useL3 by remember { mutableStateOf(true) }
@@ -152,28 +154,27 @@ fun ChessBrowserScreen(
                                 .background(ChessLensCyan.copy(alpha = 0.2f)),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text("♞", fontSize = 26.sp, color = ChessLensCyan)
+                            Text("🌐", fontSize = 26.sp, color = ChessLensCyan)
                         }
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
-                            text = "Chess.com Browser",
+                            text = "Lens Browser",
                             fontSize = 20.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color.White
                         )
                         Text(
-                            text = "Multi-API Injected Extension",
+                            text = "Universal Web Browser",
                             fontSize = 12.sp,
                             color = ChessLensGreen
                         )
                     }
-
+                    
                     HorizontalDivider(color = Slate800)
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    // Navigation Items
                     NavigationDrawerItem(
-                        label = { Text("Chess.com Browser", fontWeight = FontWeight.Bold) },
+                        label = { Text("Universal Browser", fontWeight = FontWeight.Bold) },
                         icon = { Icon(Icons.Default.Language, contentDescription = null, tint = ChessLensCyan) },
                         selected = true,
                         onClick = { scope.launch { drawerState.close() } },
@@ -256,7 +257,7 @@ fun ChessBrowserScreen(
                     Spacer(modifier = Modifier.height(14.dp))
                     HorizontalDivider(color = Slate800)
                     Spacer(modifier = Modifier.height(14.dp))
-
+                    
                     // Multi-API Engine Settings in Drawer
                     Card(
                         modifier = Modifier
@@ -351,28 +352,20 @@ fun ChessBrowserScreen(
                     title = {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(end = 4.dp)
+                            modifier = Modifier.fillMaxWidth()
                         ) {
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
                                 color = Slate900,
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
+                                Text(
+                                    text = currentUrl,
+                                    fontSize = 13.sp,
+                                    color = Color.White,
+                                    maxLines = 1,
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
-                                ) {
-                                    Icon(Icons.Default.Lock, contentDescription = null, tint = Color(0xFF4ADE80), modifier = Modifier.size(13.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = "chess.com (Multi-API Active)",
-                                        fontSize = 11.5.sp,
-                                        color = Color.White,
-                                        maxLines = 1
-                                    )
-                                }
+                                )
                             }
                         }
                     },
@@ -383,12 +376,17 @@ fun ChessBrowserScreen(
                     },
                     actions = {
                         IconButton(
-                            onClick = {
-                                webViewRef?.evaluateJavascript("if (window.clTrigger) window.clTrigger();", null)
-                                Toast.makeText(context, "Running Multi-API Analysis...", Toast.LENGTH_SHORT).show()
+                            onClick = { 
+                                isDesktop = !isDesktop
+                                webViewRef?.settings?.userAgentString = if (isDesktop) {
+                                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                                } else {
+                                    "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+                                }
+                                webViewRef?.reload()
                             }
                         ) {
-                            Icon(Icons.Default.FlashOn, contentDescription = "Analyze Now", tint = ChessLensCyan)
+                            Icon(Icons.Default.Layers, contentDescription = "Toggle Desktop Mode", tint = if (isDesktop) ChessLensCyan else Color.White)
                         }
                         IconButton(
                             onClick = {
@@ -416,7 +414,7 @@ fun ChessBrowserScreen(
                         WebView(ctx).apply {
                             configureWebView(this, app)
                             webViewRef = this
-                            loadUrl("https://www.chess.com/play/computer")
+                            loadUrl(currentUrl)
                         }
                     },
                     update = { wv ->
@@ -471,21 +469,32 @@ private fun configureWebView(webView: WebView, app: ChessLensApplication) {
     webView.webViewClient = object : WebViewClient() {
         override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
             val url = request?.url?.toString() ?: return false
-            // Restrict browser exclusively to chess.com
-            return if (url.contains("chess.com")) {
-                false // Allow loading
-            } else {
-                Toast.makeText(webView.context, "ChessLens Browser is dedicated exclusively to chess.com", Toast.LENGTH_SHORT).show()
-                true // Block external sites
-            }
+            view?.loadUrl(url)
+            return true
         }
 
         override fun onPageFinished(view: WebView?, url: String?) {
             super.onPageFinished(view, url)
-            // Inject Chess Helper extension with simultaneous multiple APIs & animated arrows
-            injectChessLensExtension(view)
+            // Inject ChessLens extension if on chess.com, otherwise inject developer tools
+            if (url?.contains("chess.com") == true) {
+                injectChessLensExtension(view)
+            } else {
+                injectDevTools(view)
+            }
         }
     }
+}
+
+private fun injectDevTools(webView: WebView?) {
+    val script = """
+        (function() {
+            var script = document.createElement('script');
+            script.src = 'https://cdn.jsdelivr.net/npm/eruda';
+            document.body.appendChild(script);
+            script.onload = function() { eruda.init(); };
+        })();
+    """.trimIndent()
+    webView?.evaluateJavascript(script, null)
 }
 
 /**

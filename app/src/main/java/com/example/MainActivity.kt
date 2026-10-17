@@ -150,7 +150,7 @@ fun ChessLensNavHost(
         }
 
         composable("browser") {
-            com.example.ui.screens.ChessBrowserScreen(
+            com.example.ui.screens.BrowserScreen(
                 onNavigateBack = { navController.popBackStack() },
                 onNavigateToAnalysis = { navController.navigate("analysis") },
                 onNavigateToVideo = { navController.navigate("video") },
